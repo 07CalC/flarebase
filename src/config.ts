@@ -5,8 +5,10 @@ export type Bindings = {
 
 
 export type Variables = {
-  JWT_SECRET: string;
-  JWT_EXPIRY?: number;
+  auth?: {
+    id: string;
+    isSuperUser: boolean;
+  }
 }
 
 export type HonoApp = {

@@ -3,7 +3,8 @@ import { sign, verify } from "hono/jwt";
 
 export type JwtPayload = {
   sub: string;
-  collectionId: string;
+  collectionId?: string;
+  isSuperUser?: boolean;
   [key: string]: unknown;
 }
 
