@@ -1,9 +1,6 @@
 import { Hono } from "hono";
+import { HonoApp } from "./config";
 
-const app = new Hono<{ Bindings: CloudflareBindings }>();
-
-app.get("/message", (c) => {
-  return c.text("Hello Hono!");
-});
+const app = new Hono<HonoApp>();
 
 export default app;
