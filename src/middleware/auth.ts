@@ -1,8 +1,10 @@
 import { Context, MiddlewareHandler, Next } from "hono";
 import { HonoApp } from "../config";
-import { error, ResponseCode } from "../utils/response";
-import { verifyJWT } from "../utils/jwt";
+import { error, ResponseCode } from "../lib/response";
+import { verifyJWT } from "../lib/jwt";
 import { getCookie } from "hono/cookie";
+import * as recordsService from "../services/records.service";
+import * as collectionService from "../services/collection.service";
 
 const PUBLIC_PATHS = ["/api/auth/signup", "/auth/signup", "/signup"];
 
@@ -30,13 +32,11 @@ export const authMiddleware: MiddlewareHandler<HonoApp> = async (c: Context<Hono
     }
 
     if (isSuperUser) {
-      const user = await c.env.DB.prepare(`
-        SELECT id FROM _superusers WHERE id = ?1
-      `).bind(userId).first<{ id: string }>();
+      const user = await recordsService.getRecordById(c.env.DB, '_superusers', userId);
       if (!user) {
         return error(c, 'Invalid token', 401, ResponseCode.UNAUTHORIZED);
       }
-      c.set('auth', { id: user.id as string, isSuperUser: true });
+      c.set('auth', { id: user.id as string, email: user.email as string, isSuperUser: true });
       return await next()
     }
 
@@ -44,24 +44,24 @@ export const authMiddleware: MiddlewareHandler<HonoApp> = async (c: Context<Hono
       return error(c, 'Invalid token', 401, ResponseCode.UNAUTHORIZED);
     }
 
-    const collectionRow = await c.env.DB.prepare(`
-      SELECT name FROM _collections WHERE id = ?1 AND type = 'auth'
-    `).bind(collectionId).first<{ name: string }>();
 
+    const collectionRow = await collectionService.getAuthCollectionById(c.env.DB, collectionId);
     if (!collectionRow || typeof collectionRow.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(collectionRow.name)) {
       return error(c, 'Invalid token', 401, ResponseCode.UNAUTHORIZED);
     }
 
-    const user = await c.env.DB.prepare(`
-      SELECT id FROM "${collectionRow.name}"
-      WHERE id = ?1
-    `).bind(userId).first<{ id: string }>();
+    // const user = await c.env.DB.prepare(`
+    //   SELECT id FROM "${collectionRow.name}"
+    //   WHERE id = ?1
+    // `).bind(userId).first<{ id: string }>();
+    //
+    const user = await recordsService.getRecordById(c.env.DB, collectionRow.name, userId);
 
     if (!user) {
       return error(c, 'Invalid token', 401, ResponseCode.UNAUTHORIZED);
     }
 
-    c.set('auth', { id: user.id as string, isSuperUser: false });
+    c.set('auth', { id: user.id as string, email: user.email, isSuperUser: false });
 
     return await next()
   } catch (err) {
