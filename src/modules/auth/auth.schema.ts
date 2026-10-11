@@ -9,7 +9,7 @@ export type SuperUser = {
 }
 
 
-export const createSuperUserSchema = z.object({
+export const signUpSchema = z.object({
   email: z.email(),
   password: z.string().min(8).max(32),
 })

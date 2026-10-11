@@ -1,4 +1,4 @@
-import { AppError, ErrorCode } from "../error";
+import { AppError, ResponseCode } from "./response";
 
 export function mapD1Error(error: unknown): never {
   if (error instanceof AppError) {
@@ -12,7 +12,7 @@ export function mapD1Error(error: unknown): never {
     throw new AppError(
       "A record with these values already exists",
       409,
-      ErrorCode.CONFLICT,
+      ResponseCode.CONFLICT,
     );
   }
 
@@ -20,7 +20,7 @@ export function mapD1Error(error: unknown): never {
     throw new AppError(
       "The operation conflicts with related records",
       409,
-      ErrorCode.CONFLICT,
+      ResponseCode.CONFLICT,
     );
   }
 
@@ -28,7 +28,7 @@ export function mapD1Error(error: unknown): never {
     throw new AppError(
       "A required field is missing",
       400,
-      ErrorCode.VALIDATION_ERROR,
+      ResponseCode.VALIDATION_ERROR,
     );
   }
 
@@ -36,7 +36,7 @@ export function mapD1Error(error: unknown): never {
     throw new AppError(
       "The provided data violates a constraint",
       400,
-      ErrorCode.VALIDATION_ERROR,
+      ResponseCode.VALIDATION_ERROR,
     );
   }
 
@@ -44,7 +44,7 @@ export function mapD1Error(error: unknown): never {
     throw new AppError(
       "The provided data has an invalid type",
       400,
-      ErrorCode.VALIDATION_ERROR,
+      ResponseCode.VALIDATION_ERROR,
     );
   }
 
@@ -52,7 +52,7 @@ export function mapD1Error(error: unknown): never {
     throw new AppError(
       "The database is temporarily unavailable",
       503,
-      ErrorCode.SERVICE_UNAVAILABLE,
+      ResponseCode.SERVICE_UNAVAILABLE,
     );
   }
 
@@ -64,13 +64,13 @@ export function mapD1Error(error: unknown): never {
     throw new AppError(
       "A database operation failed",
       500,
-      ErrorCode.DATABASE_ERROR,
+      ResponseCode.DATABASE_ERROR,
     );
   }
 
   throw new AppError(
     "A database operation failed",
     500,
-    ErrorCode.DATABASE_ERROR,
+    ResponseCode.DATABASE_ERROR,
   );
 }
