@@ -15,7 +15,9 @@
 		{
 			"binding": "DB",
 			"database_name": "fb",
-			"database_id": "d824c39e-2eca-4465-86a9-9776d7eefa41"
+			"database_id": "d824c39e-2eca-4465-86a9-9776d7eefa41",
+			"migrations_dir": "./migrations/",
+			"migrations_table": "migrations"
 		}
 	]
 }

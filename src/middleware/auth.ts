@@ -2,13 +2,14 @@ import { Context, MiddlewareHandler, Next } from "hono";
 import { HonoApp } from "../config";
 import { error } from "../utils/response";
 import { verifyJWT } from "../utils/jwt";
+import { ErrorCode } from "../error";
 
 
 export const authMiddleware: MiddlewareHandler<HonoApp> = async (c: Context<HonoApp>, next: Next) => {
   try {
     const token = c.req.header('Authorization');
     if (!token) {
-      return error(c, 'Unauthorized: No token provided', 401);
+      return error(c, 'Unauthorized: No token provided', 401, ErrorCode.INVALID_TOKEN);
     }
     const decoded = await verifyJWT(token, c.env.JWT_SECRET);
     const userId = decoded.sub;
@@ -16,7 +17,7 @@ export const authMiddleware: MiddlewareHandler<HonoApp> = async (c: Context<Hono
     const isSuperUser = decoded.isSuperUser === true;
 
     if (typeof userId !== 'string' || userId.length === 0) {
-      return error(c, 'Unauthorized: Invalid token', 401);
+      return error(c, 'Unauthorized: Invalid token', 401, ErrorCode.INVALID_TOKEN);
     }
 
     if (isSuperUser) {
@@ -24,14 +25,14 @@ export const authMiddleware: MiddlewareHandler<HonoApp> = async (c: Context<Hono
         SELECT id FROM _superusers WHERE id = ?1
       `).bind(userId).first<{ id: string }>();
       if (!user) {
-        return error(c, 'Unauthorized: Invalid token', 401);
+        return error(c, 'Unauthorized: Invalid token', 401, ErrorCode.INVALID_TOKEN);
       }
       c.set('auth', { id: user.id as string, isSuperUser: true });
       return await next()
     }
 
     if (typeof collectionId !== 'string' || collectionId.length === 0) {
-      return error(c, 'Unauthorized: Invalid token', 401);
+      return error(c, 'Unauthorized: Invalid token', 401, ErrorCode.INVALID_TOKEN);
     }
 
     const collectionRow = await c.env.DB.prepare(`
@@ -39,7 +40,7 @@ export const authMiddleware: MiddlewareHandler<HonoApp> = async (c: Context<Hono
     `).bind(collectionId).first<{ name: string }>();
 
     if (!collectionRow || typeof collectionRow.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(collectionRow.name)) {
-      return error(c, 'Unauthorized: Invalid token', 401);
+      return error(c, 'Unauthorized: Invalid token', 401, ErrorCode.INVALID_TOKEN);
     }
 
     const user = await c.env.DB.prepare(`
@@ -48,7 +49,7 @@ export const authMiddleware: MiddlewareHandler<HonoApp> = async (c: Context<Hono
     `).bind(userId).first<{ id: string }>();
 
     if (!user) {
-      return error(c, 'Unauthorized: Invalid token', 401);
+      return error(c, 'Unauthorized: Invalid token', 401, ErrorCode.INVALID_TOKEN);
     }
 
     c.set('auth', { id: user.id as string, isSuperUser: false });
@@ -56,16 +57,16 @@ export const authMiddleware: MiddlewareHandler<HonoApp> = async (c: Context<Hono
     return await next()
   } catch (err) {
     if (err instanceof Error && err.name.startsWith('Jwt')) {
-      return error(c, 'Unauthorized: Invalid token', 401);
+      return error(c, 'Unauthorized: Invalid token', 401, ErrorCode.INVALID_TOKEN);
     }
-    return error(c, 'Internal Server Error', 500);
+    return error(c, 'Internal Server Error', 500, ErrorCode.INTERNAL_SERVER_ERROR);
   }
 }
 
 export const superUserRequired: MiddlewareHandler<HonoApp> = async (c: Context<HonoApp>, next: Next) => {
   const auth = c.get('auth');
   if (!auth || !auth.isSuperUser) {
-    return error(c, 'Forbidden: Superuser access required', 403);
+    return error(c, 'Forbidden: Superuser access required', 403, ErrorCode.FORBIDDEN);
   }
   await next();
 }
