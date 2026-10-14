@@ -7,8 +7,9 @@ export type Bindings = {
 export type Variables = {
   auth?: {
     id: string;
-    email?: string;
     isSuperUser: boolean;
+    collectionId: string;
+    sessionId: string;
   }
 }
 

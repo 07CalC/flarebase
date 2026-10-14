@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { HonoApp } from "./config";
-import { authMiddleware } from "./middleware/auth";
+import { recordsRouter } from "./routes/records.route";
 import { AppError, ResponseCode } from "./lib/response";
+import { collectionRouter } from "./routes/collection.route";
 
 const app = new Hono<HonoApp>();
 
@@ -21,7 +22,8 @@ app.get('/api/health', (c) => {
   return c.json({ message: 'ok', data: { status: 'ok' }, error: null, code: ResponseCode.SUCCESS }, 200);
 });
 
-app.use('*', authMiddleware);
+app.route('/api/collections', collectionRouter);
+app.route('/api/collections/:collectionId', recordsRouter);
 
 app.notFound((c) => {
   return c.json({ message: null, data: null, error: 'Not Found', code: ResponseCode.NOT_FOUND }, 404);

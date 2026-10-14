@@ -5,9 +5,7 @@ CREATE TABLE IF NOT EXISTS _migrations (
 );
 
 CREATE TABLE IF NOT EXISTS _collections (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(5)))),
-  name TEXT NOT NULL,
-  system BOOLEAN NOT NULL DEFAULT FALSE,
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(5)))), name TEXT NOT NULL, system BOOLEAN NOT NULL DEFAULT FALSE,
   type TEXT NOT NULL DEFAULT 'base' CHECK (type IN ('base', 'auth', 'view')),
   fields JSON NOT NULL DEFAULT '[]',
   indexes JSON NOT NULL DEFAULT '[]',
@@ -23,8 +21,10 @@ CREATE TABLE IF NOT EXISTS _collections (
   updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_collections_name ON _collections(name);
+
 INSERT INTO _collections (id, name, system, type, fields, indexes, listRule, viewRule, createRule, updateRule, deleteRule, options) VALUES
-  ('_superusers', '_superusers', 1, 'auth', '[{"name":"email","type":"text","required":true,"unique":true},{"name":"password","type":"text","required":true}]', '[]', null, null, null, null, null, '{}');
+  ('_superusers', '_superusers', 1, 'auth', '[{"name":"email","type":"text","required":true,"unique":true},{"name":"password","type":"text","required":true}]', '[{"name": "idx_superusers_email", "on": "email"}]', null, null, null, null, null, '{}');
 
 CREATE TABLE IF NOT EXISTS _superusers (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(5)))),
@@ -33,3 +33,5 @@ CREATE TABLE IF NOT EXISTS _superusers (
   createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_superusers_email ON _superusers(email);

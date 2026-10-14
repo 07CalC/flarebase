@@ -1,25 +1,46 @@
+import { Collection, getNonHiddenCollectionField } from "./collection.service";
 
 
-export async function getRecods(db: D1Database, collectionName: string): Promise<Record<string, any>[]> {
-  const query = `SELECT * FROM "${collectionName}"`;
+export async function getRecords(db: D1Database, collection: Collection) {
+  const fields = getNonHiddenCollectionField(collection);
+  const fieldsToSelect = fields.map(f => `"${f.name}"`).join(", ");
+  const query = `
+    SELECT ${fieldsToSelect} FROM "${collection.name}"
+  `;
   const result = await db.prepare(query).all();
   return result.results;
 }
 
-export async function getRecordById(db: D1Database, collectionName: string, id: string): Promise<Record<string, any> | null> {
-  const query = `SELECT * FROM "${collectionName}" WHERE id = ?1`;
-  const result = await db.prepare(query).bind(id).first();
+export async function getRecordById(db: D1Database, collection: Collection, recordId: string) {
+  const fields = getNonHiddenCollectionField(collection);
+  const fieldsToSelect = fields.map(f => `"${f.name}"`).join(", ");
+  const query = `
+    SELECT ${fieldsToSelect} FROM "${collection.name}" WHERE id = ?1
+  `;
+  const result = await db.prepare(query).bind(recordId).first();
   return result || null;
 }
 
-export async function sanitizeRecords(records: Record<string, any>[], hiddenFields: string[]): Promise<Record<string, any>[]> {
-  return records.map(record => {
-    const sanitizedRecord: Record<string, any> = {};
-    for (const key in record) {
-      if (!hiddenFields.includes(key)) {
-        sanitizedRecord[key] = record[key];
-      }
-    }
-    return sanitizedRecord;
-  });
+export async function countRecords(db: D1Database, collection: Collection) {
+  const query = `
+    SELECT COUNT(*) as count FROM "${collection.name}"
+  `;
+  const result = await db.prepare(query).first<{ count: number }>();
+  return result?.count || 0;
 }
+
+export async function createRecord(db: D1Database, collection: Collection, data: Record<string, any>) {
+  const fields = getNonHiddenCollectionField(collection);
+  const fieldNames = fields.map(f => `"${f.name}"`);
+  const placeholders = fields.map((_, index) => `?${index + 1}`);
+  const values = fields.map(f => data[f.name]);
+
+  const query = `
+    INSERT INTO "${collection.name}" (${fieldNames.join(", ")})
+    VALUES (${placeholders.join(", ")})
+    RETURNING *
+  `;
+  const result = await db.prepare(query).bind(...values).first();
+  return result || null;
+}
+
