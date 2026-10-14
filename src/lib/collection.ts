@@ -118,7 +118,7 @@ export const createCollectionSchema = z
     refineAuthFields(val.type, val.fields, ctx);
   });
 
-export type CreateCollectionInput = z.infer<typeof createCollectionSchema>;
+export type CreateCollectionInput = z.input<typeof createCollectionSchema>;
 
 export const updateCollectionSchema = z
   .object({
@@ -142,7 +142,7 @@ export const updateCollectionSchema = z
     }
   });
 
-export type UpdateCollectionInput = z.infer<typeof updateCollectionSchema>;
+export type UpdateCollectionInput = z.input<typeof updateCollectionSchema>;
 
 export function formatZodIssues(error: z.ZodError): string {
   return error.issues

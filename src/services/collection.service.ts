@@ -176,11 +176,13 @@ export async function createCollection(
   if (existing) {
     throw new AppError("Collection already exists", 409, ResponseCode.CONFLICT);
   }
-  assertValidIndexes(input.indexes, input.fields);
+  const indexes = input.indexes ?? [];
+  const type = input.type ?? "base";
+  assertValidIndexes(indexes, input.fields);
 
   const id = generateCollectionId();
   const fieldsJson = JSON.stringify(input.fields);
-  const indexesJson = JSON.stringify(input.indexes);
+  const indexesJson = JSON.stringify(indexes);
   const optionsJson = JSON.stringify(input.options ?? {});
 
   const columnDefs = [
@@ -199,7 +201,7 @@ export async function createCollection(
       .bind(
         id,
         input.name,
-        input.type,
+        type,
         fieldsJson,
         indexesJson,
         input.listRule ?? null,
@@ -212,7 +214,7 @@ export async function createCollection(
     db.prepare(
       `CREATE TABLE ${quoteIdent(input.name)} (${columnDefs.join(", ")})`,
     ),
-    ...input.indexes.map((index) =>
+    ...indexes.map((index) =>
       db.prepare(buildCreateIndexStatement(input.name, index)),
     ),
   ];
@@ -234,7 +236,7 @@ export async function updateCollectionById(
   collectionId: string,
   input: UpdateCollectionInput,
 ): Promise<Collection> {
-  const existing = await getCollectionById(db, collectionId);
+  const existing = await getCollectionByIdOrName(db, collectionId);
   if (!existing) {
     throw new AppError("Collection not found", 404, ResponseCode.NOT_FOUND);
   }
@@ -376,7 +378,7 @@ export async function deleteCollectionById(
   db: D1Database,
   collectionId: string,
 ): Promise<Collection> {
-  const existing = await getCollectionById(db, collectionId);
+  const existing = await getCollectionByIdOrName(db, collectionId);
   if (!existing) {
     throw new AppError("Collection not found", 404, ResponseCode.NOT_FOUND);
   }
