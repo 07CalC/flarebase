@@ -1,4 +1,3 @@
-
 export interface Collection {
   id: string;
   name: string;
@@ -15,7 +14,6 @@ export interface Collection {
   createdAt: Date;
   updatedAt: Date;
 }
-
 
 export async function getCollectionById(db: D1Database, collectionId: string): Promise<Collection | null> {
   const query = `

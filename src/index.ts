@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import { HonoApp } from "./config";
 import { authMiddleware } from "./middleware/auth";
-import { authRouter } from "./modules/auth/auth.routes";
-import { AppError, ResponseCode } from "./utils/response";
+import { AppError, ResponseCode } from "./lib/response";
 
 const app = new Hono<HonoApp>();
 
@@ -18,7 +17,14 @@ app.onError((err, c) => {
   }, 500)
 })
 
+app.get('/api/health', (c) => {
+  return c.json({ message: 'ok', data: { status: 'ok' }, error: null, code: ResponseCode.SUCCESS }, 200);
+});
+
 app.use('*', authMiddleware);
-app.route('/api/auth', authRouter);
+
+app.notFound((c) => {
+  return c.json({ message: null, data: null, error: 'Not Found', code: ResponseCode.NOT_FOUND }, 404);
+});
 
 export default app;
