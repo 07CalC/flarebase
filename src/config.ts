@@ -5,12 +5,12 @@ export type Bindings = {
 
 
 export type Variables = {
-  auth?: {
+  auth: {
     id: string;
     isSuperUser: boolean;
     collectionId: string;
     sessionId: string;
-  }
+  } | null;
 }
 
 export type HonoApp = {
