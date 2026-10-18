@@ -68,6 +68,14 @@ export function mapD1Error(error: unknown): never {
     );
   }
 
+  if (/table .*?already exists|view .*?already exists/i.test(message)) {
+    throw new AppError(
+      "A database operation failed",
+      500,
+      ResponseCode.INTERNAL_SERVER_ERROR,
+    );
+  }
+
   throw new AppError(
     "A database operation failed",
     500,

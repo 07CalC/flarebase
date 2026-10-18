@@ -3,8 +3,14 @@ import { HonoApp } from "./config";
 import { recordsRouter } from "./routes/records.route";
 import { AppError, ResponseCode } from "./lib/response";
 import { collectionRouter } from "./routes/collection.route";
+import { authMiddleware } from "./middleware/auth";
 
 const app = new Hono<HonoApp>();
+
+// auth middleware doesn't denies unauthenticated reqursts, it just adds the auth context to the request if the user is authenticated
+// since api rules for each route can be different, routes will handle the authorization 
+// themeselves
+app.use("*", authMiddleware);
 
 app.onError((err, c) => {
   if (err instanceof AppError) {

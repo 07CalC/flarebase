@@ -1,5 +1,5 @@
 import { assertValidCollectionName, quoteIdent } from "../lib/collection-name";
-import { AppError, ResponseCode } from "../lib/response";
+import { AppError, ResponseCode } from "../lib/response"; import { mapD1Error } from "../lib/d1-error";
 import { AUTH_REQUIRED_FIELDS } from "../lib/auth";
 import {
   assertIndexColumnsExist,
@@ -74,11 +74,49 @@ function generateCollectionId(): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+async function firstRow(
+  db: D1Database,
+  query: string,
+  ...params: unknown[]
+): Promise<Record<string, any> | null> {
+  try {
+    return await db
+      .prepare(query)
+      .bind(...params)
+      .first<Record<string, any>>();
+  } catch (err) {
+    mapD1Error(err);
+  }
+}
+
+async function allRows(
+  db: D1Database,
+  query: string,
+): Promise<Record<string, any>[]> {
+  try {
+    const result = await db.prepare(query).all<Record<string, any>>();
+    return result.results ?? [];
+  } catch (err) {
+    mapD1Error(err);
+  }
+}
+
+async function runBatch(
+  db: D1Database,
+  statements: D1PreparedStatement[],
+): Promise<void> {
+  try {
+    await db.batch(statements);
+  } catch (err) {
+    mapD1Error(err);
+  }
+}
+
 export async function getCollectionById(db: D1Database, collectionId: string): Promise<Collection | null> {
   const query = `
     SELECT ${COLLECTION_SELECT} FROM _collections WHERE id = ?1
   `;
-  const result = await db.prepare(query).bind(collectionId).first<Record<string, any>>();
+  const result = await firstRow(db, query, collectionId);
   if (!result) {
     return null;
   }
@@ -90,7 +128,7 @@ export async function getCollectionByName(db: D1Database, name: string): Promise
   const query = `
     SELECT ${COLLECTION_SELECT} FROM _collections WHERE name = ?1
   `;
-  const result = await db.prepare(query).bind(name).first<Record<string, any>>();
+  const result = await firstRow(db, query, name);
   if (!result) {
     return null;
   }
@@ -101,7 +139,7 @@ export async function getAuthCollectionById(db: D1Database, collectionId: string
   const query = `
     SELECT ${COLLECTION_SELECT} FROM _collections WHERE id = ?1 AND type = 'auth'
   `;
-  const result = await db.prepare(query).bind(collectionId).first<Record<string, any>>();
+  const result = await firstRow(db, query, collectionId);
   if (!result) {
     return null;
   }
@@ -113,7 +151,7 @@ export async function getAuthCollectionByName(db: D1Database, name: string): Pro
   const query = `
     SELECT ${COLLECTION_SELECT} FROM _collections WHERE name = ?1 AND type = 'auth'
   `;
-  const result = await db.prepare(query).bind(name).first<Record<string, any>>();
+  const result = await firstRow(db, query, name);
   if (!result) {
     return null;
   }
@@ -128,8 +166,8 @@ export async function listCollections(db: D1Database): Promise<Collection[]> {
   const query = `
     SELECT ${COLLECTION_SELECT} FROM _collections ORDER BY createdAt ASC, name ASC
   `;
-  const result = await db.prepare(query).all<Record<string, any>>();
-  return (result.results ?? []).map(parseCollectionRow);
+  const results = await allRows(db, query);
+  return results.map(parseCollectionRow);
 }
 
 export async function getCollectionByIdOrName(
@@ -140,8 +178,16 @@ export async function getCollectionByIdOrName(
   if (byId) return byId;
   try {
     return await getCollectionByName(db, idOrName);
-  } catch {
-    return null;
+  } catch (err) {
+    // only swallow "not a valid identifier"; real database errors must surface
+    if (
+      err instanceof AppError &&
+      err.statusCode === 400 &&
+      err.code === ResponseCode.INVALID_REQUEST
+    ) {
+      return null;
+    }
+    throw err;
   }
 }
 
@@ -218,7 +264,7 @@ export async function createCollection(
       db.prepare(buildCreateIndexStatement(input.name, index)),
     ),
   ];
-  await db.batch(statements);
+  await runBatch(db, statements);
 
   const created = await getCollectionById(db, id);
   if (!created) {
@@ -361,7 +407,7 @@ export async function updateCollectionById(
         existing.id,
       ),
   );
-  await db.batch(statements);
+  await runBatch(db, statements);
 
   const updated = await getCollectionById(db, existing.id);
   if (!updated) {
@@ -389,7 +435,7 @@ export async function deleteCollectionById(
       ResponseCode.INVALID_REQUEST,
     );
   }
-  await db.batch([
+  await runBatch(db, [
     db.prepare(`DROP TABLE IF EXISTS ${quoteIdent(existing.name)}`),
     db.prepare(`DELETE FROM _sessions WHERE collectionId = ?1`).bind(existing.id),
     db.prepare(`DELETE FROM _collections WHERE id = ?1`).bind(existing.id),

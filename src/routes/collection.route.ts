@@ -1,6 +1,6 @@
 import { Context, Hono } from "hono";
 import { HonoApp } from "../config";
-import { authMiddleware, superUserRequired } from "../middleware/auth";
+import { superUserRequired } from "../middleware/auth";
 import {
   AppError,
   error,
@@ -16,7 +16,9 @@ import * as collectionService from "../services/collection.service";
 
 export const collectionRouter = new Hono<HonoApp>();
 
-collectionRouter.use("/*", authMiddleware, superUserRequired);
+// authentication runs globally on the root app; this router only requires
+// the caller to be a superuser for collection management
+collectionRouter.use("/*", superUserRequired);
 
 async function readJsonBody(c: Context<HonoApp>): Promise<unknown> {
   try {

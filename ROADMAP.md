@@ -29,18 +29,19 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
   - `hashPassword` output is salted and versioned; `verifyPassword(hash, password)` returns true/false
   - unit tests for hash→verify roundtrip, wrong password, and legacy-format rejection
 
-### 1.2 [ ] Global middleware wiring + code hygiene
+### 1.2 [x] Global middleware wiring + code hygiene
 
-- **Goal:** honor the ARCHITECTURE contract that *every* request is authenticated before routes; remove dead code.
+- **Goal:** honor the ARCHITECTURE contract that *every* request is authenticated before routes; remove dead code; carry the full sanitized user row in the auth context.
 - **Scope:**
   - Mount `authMiddleware` once on the root app in `src/index.ts` (before `/api/*` routes); remove per-router mounting from `collection.route.ts` (`superUserRequired` stays on the management router)
-  - Route all D1 throws through `mapD1Error` in `collection.service` and later `records.service`
-  - Remove/absorb dead exports (`lib/auth.ts` leftovers) as their consumers land
-- **Files:** `src/index.ts`, `src/routes/collection.route.ts`, `src/services/*.ts`
+  - Extend the auth context so every route can inspect the caller: `AuthContext` now holds `id`, `isSuperUser`, `collectionId`, `collectionName`, `sessionId`, plus `user` — the **full row** of the auth table (all fields incl. hidden columns fetched internally) with sensitive fields stripped: `password` always, plus any field flagged `hidden` (case-insensitive names). Sanitization lives in `lib/auth.ts::sanitizeAuthRecord`
+  - `lib/auth.ts`: `sanitizeAuthRecord` now attaches the full sanitized row to the context
+  - Route all D1 throws through `mapD1Error` in `collection.service` (reads + batch writes); `getCollectionByIdOrName` only swallows invalid-identifier errors, real DB failures surface as 500
+  - Tests use the real `src/index.ts` app (no duplicated onError/mounting); `tests/auth-context.test.ts` locks the context shape
+  - Removed dead export `authCreateSchema` from `lib/auth.ts`
+- **Files:** `src/index.ts`, `src/config.ts`, `src/middleware/auth.ts`, `src/lib/auth.ts`, `src/lib/d1-error.ts`, `src/services/collection.service.ts`, `src/services/records.service.ts`, `src/routes/collection.route.ts`, `tests/setup.ts`, `tests/auth-context.test.ts`
 - **Depends on:** nothing
-- **Acceptance:**
-  - request context (`c.get("auth")`) is populated for all routes when a valid token is present, `null` otherwise
-  - existing collection test suite still passes unchanged
+- **Acceptance:** ✅ context populated for all routes (full sanitized user row, no password/hidden leakage); ✅ collection + records test suites pass unchanged
 
 ### 1.3 [ ] Configuration + bindings
 

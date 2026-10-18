@@ -1,13 +1,14 @@
-import { Hono } from "hono";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Hono } from "hono";
 import type { HonoApp } from "../src/config";
-import { AppError, ResponseCode } from "../src/lib/response";
 import { generateJWT } from "../src/lib/jwt";
 import { createSession } from "../src/services/session.service";
 import { createCollection } from "../src/services/collection.service";
-import { collectionRouter } from "../src/routes/collection.route";
+// the real entrypoint, so tests exercise the same middleware wiring as prod
+// (global authMiddleware etc.)
+import app from "../src/index";
 import { createTestDb, type RawDatabase } from "./d1-shim";
 
 export const TEST_SECRET = "test-secret-for-collection-tests";
@@ -74,31 +75,6 @@ export async function setupTest(): Promise<TestContext> {
     jti: u.jti,
     expiresAt: u.exp,
   });
-
-  const app = new Hono<HonoApp>();
-  app.onError((err, c) => {
-    if (err instanceof AppError) {
-      return c.json(
-        {
-          message: err.message,
-          data: null,
-          error: err.message,
-          code: err.code,
-        },
-        err.statusCode,
-      );
-    }
-    return c.json(
-      {
-        message: "Internal Server Error",
-        data: null,
-        error: "Internal Server Error",
-        code: ResponseCode.INTERNAL_SERVER_ERROR,
-      },
-      500,
-    );
-  });
-  app.route("/api/collections", collectionRouter);
 
   return {
     db,

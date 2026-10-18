@@ -5,7 +5,7 @@ import { verifyJWT } from "../lib/jwt";
 import * as recordsService from "../services/records.service";
 import * as collectionService from "../services/collection.service";
 import * as sessionService from "../services/session.service";
-import { isSuperusersCollection } from "../lib/auth";
+import { isSuperusersCollection, sanitizeAuthRecord } from "../lib/auth";
 import { isValidCollectionName } from "../lib/collection-name";
 
 
@@ -79,7 +79,11 @@ async function authenticate(c: Context<HonoApp>, token: string): Promise<boolean
     return false;
   }
 
-  const user = await recordsService.getRecordById(c.env.DB, collectionRow, userId);
+  // fetch the entire row (all fields, incl. hidden ones); sanitizeAuthRecord
+  // below strips password / hidden fields before anything touches the context
+  const user = await recordsService.getRecordById(c.env.DB, collectionRow, userId, {
+    includeHiddenFields: true,
+  });
   if (!user) {
     return false;
   }
@@ -89,7 +93,9 @@ async function authenticate(c: Context<HonoApp>, token: string): Promise<boolean
     id: user.id as string,
     isSuperUser,
     collectionId: collectionRow.id,
+    collectionName: collectionRow.name,
     sessionId: jti,
+    user: sanitizeAuthRecord(user, collectionRow.fields),
   });
   return true;
 }

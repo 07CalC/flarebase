@@ -11,7 +11,27 @@ export async function getRecords(db: D1Database, collection: Collection) {
   return result.results;
 }
 
-export async function getRecordById(db: D1Database, collection: Collection, recordId: string) {
+export interface GetRecordOptions {
+  // false (default): project only non-hidden fields
+  // true: SELECT * — full row incl. hidden fields; callers must sanitize
+  //       sensitive fields themselves before exposing the row
+  includeHiddenFields?: boolean;
+}
+
+export async function getRecordById(
+  db: D1Database,
+  collection: Collection,
+  recordId: string,
+  options: GetRecordOptions = {},
+) {
+  if (options.includeHiddenFields) {
+    const query = `
+      SELECT * FROM "${collection.name}" WHERE id = ?1
+    `;
+    const result = await db.prepare(query).bind(recordId).first();
+    return result || null;
+  }
+
   const fields = getNonHiddenCollectionField(collection);
   const fieldsToSelect = fields.map(f => `"${f.name}"`).join(", ");
   const query = `
