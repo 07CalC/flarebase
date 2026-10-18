@@ -43,17 +43,18 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
 - **Depends on:** nothing
 - **Acceptance:** ✅ context populated for all routes (full sanitized user row, no password/hidden leakage); ✅ collection + records test suites pass unchanged
 
-### 1.3 [ ] Configuration + bindings
+### 1.3 [x] Configuration + bindings
 
-- **Goal:** the worker config matches the target architecture (D1 + R2 + DO + assets + secrets).
+- **Goal:** the worker config matches the target architecture (D1 + R2 + assets + secrets) and env handling is validated.
 - **Scope:**
-  - `wrangler.jsonc`: add R2 bucket binding (`FILE_BUCKET`), durable object bindings (added properly in Phase 6), keep D1 `DB` and `ASSETS`
-  - `src/config.ts`: extend `Bindings` with real types (R2Bucket, DO classes); generate types with `npm run cf-typegen`
-  - JWT secret handling: fail fast if `JWT_SECRET` missing at startup; document prod setup
-  - Make session TTL configurable (`SESSION_TTL` env/`vars`) instead of the hardcoded constant in `lib/jwt.ts`
-- **Files:** `wrangler.jsonc`, `src/config.ts`, `src/lib/jwt.ts`, `.dev.vars` (template), `README.md`
+  - `wrangler.jsonc`: added `FILE_BUCKET` R2 binding (bucket `flarebase-files`), `SESSION_TTL_SECONDS` var (default 604800); DO bindings land properly in Phase 6 when the class exists; D1 `DB` and `ASSETS` untouched; types regenerated via `npm run cf-typegen`
+  - `src/lib/env.ts` (new): `requireJwtSecret` — runtime fail-fast with a clear 500 "Server misconfigured" error (Workers have no true startup hook, so validation happens at first use); `resolveSessionTtlSeconds` — parses/validates the `SESSION_TTL_SECONDS` var against the 300–2592000 bounds exported by `lib/jwt.ts`
+  - `src/lib/jwt.ts`: session TTL no longer hardcoded — `generateJWT(payload, secret, { ttlSeconds?, jti? })`; `DEFAULT_SESSION_TTL_SECONDS` / `MIN` / `MAX` exported
+  - `src/middleware/auth.ts`: passes through structured `AppError`s to the global error handler (misconfigured env keeps its clear message instead of a masked "Internal Server Error")
+  - Docs: README configuration section (bindings table, prod setup: bucket create, migrate, secret put); `.dev.vars.example` template (gitignored `.dev.vars` stays local)
+- **Files:** `wrangler.jsonc`, `worker-configuration.d.ts` (generated), `src/lib/env.ts`, `src/lib/jwt.ts`, `src/middleware/auth.ts`, `README.md`, `.dev.vars.example`
 - **Depends on:** nothing
-- **Acceptance:** `npm run typecheck` and `npm run dev` work with the extended config; missing secret produces a clear error.
+- **Acceptance:** ✅ `npm run typecheck` clean; ✅ dry-run deploy exposes DB / FILE_BUCKET / ASSETS / SESSION_TTL_SECONDS bindings; ✅ `npm run dev` boots and serves `/api/health` + assets; ✅ missing secret fails with a clear error
 
 ---
 

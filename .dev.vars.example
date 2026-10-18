@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local development (gitignored).
+# Secrets used in production are managed with `wrangler secret put <NAME>`.
+
+JWT_SECRET=change-me-in-production-32-chars-min

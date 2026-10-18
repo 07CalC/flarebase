@@ -9,16 +9,30 @@ export type JwtPayload = {
   [key: string]: unknown;
 }
 
-export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
+// TTL bounds are shared with lib/env.ts which validates the
+// SESSION_TTL_SECONDS worker var (the resolved value is passed into
+// generateJWT by its callers, e.g. the auth service)
+export const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+export const MIN_SESSION_TTL_SECONDS = 300; // 5 minutes
+export const MAX_SESSION_TTL_SECONDS = 2_592_000; // 30 days
+
+export type GenerateJwtOptions = {
+  ttlSeconds?: number;
+  jti?: string;
+};
 
 export function newJti(): string {
   return crypto.randomUUID();
 }
 
-export async function generateJWT(payload: JwtPayload, secret: string): Promise<{ token: string; jti: string; exp: number }> {
-  //TODO: should be configurable
-  const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
-  const jti = typeof payload.jti === 'string' && payload.jti.length > 0 ? payload.jti : newJti();
+export async function generateJWT(
+  payload: JwtPayload,
+  secret: string,
+  options: GenerateJwtOptions = {},
+): Promise<{ token: string; jti: string; exp: number }> {
+  const ttlSeconds = options.ttlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;
+  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const jti = typeof options.jti === "string" && options.jti.length > 0 ? options.jti : newJti();
   const token = await sign({
     ...payload,
     jti,
@@ -31,6 +45,3 @@ export async function verifyJWT(token: string, secret: string): Promise<JwtPaylo
   const decoded = await verify(token, secret, "HS256");
   return decoded as JwtPayload;
 }
-
-
-

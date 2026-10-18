@@ -1,6 +1,7 @@
 import { Context, MiddlewareHandler, Next } from "hono";
 import { HonoApp } from "../config";
-import { error, ResponseCode } from "../lib/response";
+import { AppError, error, ResponseCode } from "../lib/response";
+import { requireJwtSecret } from "../lib/env";
 import { verifyJWT } from "../lib/jwt";
 import * as recordsService from "../services/records.service";
 import * as collectionService from "../services/collection.service";
@@ -24,6 +25,11 @@ export const authMiddleware: MiddlewareHandler<HonoApp> = async (c: Context<Hono
     }
     return await next();
   } catch (err) {
+    // structured errors (e.g. misconfigured env, database errors) keep their
+    // specific status/code via the global error handler
+    if (err instanceof AppError) {
+      throw err;
+    }
     if (err instanceof Error && err.name.startsWith("Jwt")) {
       c.set("auth", null);
       return await next();
@@ -44,7 +50,7 @@ export const superUserRequired: MiddlewareHandler<HonoApp> = async (c: Context<H
 async function authenticate(c: Context<HonoApp>, token: string): Promise<boolean> {
   let decoded;
   try {
-    decoded = await verifyJWT(token, c.env.JWT_SECRET);
+    decoded = await verifyJWT(token, requireJwtSecret(c.env));
   } catch (err) {
     if (err instanceof Error && err.name.startsWith("Jwt")) {
       return false;

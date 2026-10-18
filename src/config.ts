@@ -11,6 +11,8 @@ export type AuthContext = {
   collectionId: string;
   collectionName: string;
   sessionId: string;
+  // this contains the sanitized user record, with hidden and sensitive fields removed
+  // this also contains id, so we can directly do auth.user['key'] to get the value of a field in the user record
   user: AuthUser;
 };
 

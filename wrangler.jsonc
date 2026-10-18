@@ -11,6 +11,15 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
+	"r2_buckets": [
+		{
+			"binding": "FILE_BUCKET",
+			"bucket_name": "flarebase-files"
+		}
+	],
+	"vars": {
+		"SESSION_TTL_SECONDS": "604800"
+	},
 	"d1_databases": [
 		{
 			"binding": "DB",
