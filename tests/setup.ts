@@ -66,7 +66,7 @@ async function resetDatabase(db: D1Database): Promise<void> {
     .prepare(
       `UPDATE _collections
        SET listRule = NULL, viewRule = NULL, createRule = NULL,
-           updateRule = NULL, deleteRule = NULL
+           updateRule = NULL, deleteRule = NULL, compiledRules = '{}'
        WHERE system = 1`,
     )
     .run();

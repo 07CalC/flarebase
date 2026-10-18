@@ -199,7 +199,10 @@ describe("POST /api/collections", () => {
     const res = await superApi(ctx, "POST", "/api/collections", {
       body: {
         name: "posts",
-        fields: [{ name: "title", type: "text" }],
+        fields: [
+          { name: "title", type: "text" },
+          { name: "owner", type: "text" },
+        ],
         indexes: [{ name: "idx_posts_title", on: "title" }],
         listRule: "",
         viewRule: "owner = @request.auth.id",

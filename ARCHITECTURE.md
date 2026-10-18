@@ -43,7 +43,7 @@ the `auth` collections have special required fields which can be used for authen
 the `auth` collections also have special methods for handling authentication and authorization. these methods are:
 - `authWithPassword(email: string, password: string)`: authenticates a user with their email and password.
 
-the authorization is handled by the `api rules` which are stored in the `_collections` collection. the `api rules` are a set of rules that define what actions can be performed on a collection and by whom. the `api rules` can be defined using a simple syntax and can be applied to any collection.
+the authorization is handled by the `api rules` which are stored in the `_collections` collection. the `api rules` are a set of rules that define what actions can be performed on a collection and by whom. the `api rules` can be defined using a simple syntax and can be applied to any collection. the full specification (language, compiled storage format, enforcement contract) is in [API_RULES.md](./API_RULES.md).
 
 each incoming request is populated wih the user information (if applicable) before the hitting any route. this is done by the `auth` middleware which checks the request for a valid session and populates the request with the user information if the session is valid.
 

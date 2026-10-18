@@ -1,3 +1,5 @@
+import { compileRuleSet, formatRuleErrors } from "../api-rules";
+import type { CompiledRuleSet, RuleField } from "../api-rules";
 import { assertValidCollectionName, quoteIdent } from "../lib/collection-name";
 import { AppError, ResponseCode } from "../lib/response"; import { mapD1Error } from "../lib/d1-error";
 import { AUTH_REQUIRED_FIELDS } from "../lib/auth";
@@ -196,8 +198,63 @@ export async function getCollectionByIdOrName(
   }
 }
 
+export interface CompiledCollection extends Collection {
+  compiledRules: CompiledRuleSet;
+}
+
+/**
+ * Internal getter for the records layer: same lookup semantics as
+ * getCollectionByIdOrName (id wins over name) plus the parsed `compiledRules`
+ * artifact. The public collection endpoints deliberately never select or
+ * serialize it.
+ */
+export async function getCompiledCollectionByIdOrName(
+  db: D1Database,
+  idOrName: string,
+): Promise<CompiledCollection | null> {
+  const query = `
+    SELECT ${COLLECTION_SELECT}, compiledRules FROM _collections
+    WHERE id = ?1 OR name = ?2
+    ORDER BY (id = ?1) DESC
+    LIMIT 1
+  `;
+  const result = await firstRow(db, query, idOrName, idOrName);
+  if (!result) return null;
+  const { compiledRules, ...row } = result;
+  return {
+    ...parseCollectionRow(row),
+    compiledRules: parseJsonField<CompiledRuleSet>(
+      compiledRules,
+      {},
+      "compiledRules",
+    ),
+  };
+}
+
 function fieldNamesOf(fields: CollectionFieldInput[] | Field[]): Set<string> {
   return new Set(fields.map((f) => f.name));
+}
+
+interface RuleTexts {
+  listRule?: string | null;
+  viewRule?: string | null;
+  createRule?: string | null;
+  updateRule?: string | null;
+  deleteRule?: string | null;
+}
+
+// Rules are compiled at save time against the effective field metadata, so an
+// invalid rule (or a field change that breaks a stored rule) never persists.
+function compileRulesOrThrow(rules: RuleTexts, fields: RuleField[]): CompiledRuleSet {
+  const { compiled, errors } = compileRuleSet(rules, fields);
+  if (errors.length > 0) {
+    throw new AppError(
+      formatRuleErrors(errors),
+      400,
+      ResponseCode.VALIDATION_ERROR,
+    );
+  }
+  return compiled;
 }
 
 function assertValidIndexes(
@@ -231,6 +288,17 @@ export async function createCollection(
   const type = input.type ?? "base";
   assertValidIndexes(indexes, input.fields);
 
+  const compiledRules = compileRulesOrThrow(
+    {
+      listRule: input.listRule,
+      viewRule: input.viewRule,
+      createRule: input.createRule,
+      updateRule: input.updateRule,
+      deleteRule: input.deleteRule,
+    },
+    input.fields,
+  );
+
   const id = generateCollectionId();
   const fieldsJson = JSON.stringify(input.fields);
   const indexesJson = JSON.stringify(indexes);
@@ -246,8 +314,8 @@ export async function createCollection(
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        `INSERT INTO _collections (id, name, system, type, fields, indexes, listRule, viewRule, createRule, updateRule, deleteRule, options)
-         VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+        `INSERT INTO _collections (id, name, system, type, fields, indexes, listRule, viewRule, createRule, updateRule, deleteRule, options, compiledRules)
+         VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
       )
       .bind(
         id,
@@ -261,6 +329,7 @@ export async function createCollection(
         input.updateRule ?? null,
         input.deleteRule ?? null,
         optionsJson,
+        JSON.stringify(compiledRules),
       ),
     db.prepare(
       `CREATE TABLE ${quoteIdent(input.name)} (${columnDefs.join(", ")})`,
@@ -380,6 +449,20 @@ export async function updateCollectionById(
     fields = input.fields as Field[];
   }
 
+  // Any field change recompiles all five rules against the effective metadata,
+  // and a patch may fix broken rules in the same write.
+  const effectiveRules: RuleTexts = {
+    listRule: input.listRule !== undefined ? input.listRule : existing.listRule,
+    viewRule: input.viewRule !== undefined ? input.viewRule : existing.viewRule,
+    createRule:
+      input.createRule !== undefined ? input.createRule : existing.createRule,
+    updateRule:
+      input.updateRule !== undefined ? input.updateRule : existing.updateRule,
+    deleteRule:
+      input.deleteRule !== undefined ? input.deleteRule : existing.deleteRule,
+  };
+  const compiledRules = compileRulesOrThrow(effectiveRules, fields);
+
   const nextIndexes: Array<CollectionIndexInput | CollectionIndex> =
     input.indexes ?? existing.indexes;
   assertValidIndexes(nextIndexes, fields);
@@ -396,19 +479,20 @@ export async function updateCollectionById(
         `UPDATE _collections
          SET name = ?1, fields = ?2, indexes = ?3,
              listRule = ?4, viewRule = ?5, createRule = ?6, updateRule = ?7, deleteRule = ?8,
-             options = ?9, updatedAt = CURRENT_TIMESTAMP
-         WHERE id = ?10`,
+             options = ?9, compiledRules = ?10, updatedAt = CURRENT_TIMESTAMP
+         WHERE id = ?11`,
       )
       .bind(
         name,
         JSON.stringify(fields),
         JSON.stringify(nextIndexes),
-        input.listRule !== undefined ? input.listRule : existing.listRule,
-        input.viewRule !== undefined ? input.viewRule : existing.viewRule,
-        input.createRule !== undefined ? input.createRule : existing.createRule,
-        input.updateRule !== undefined ? input.updateRule : existing.updateRule,
-        input.deleteRule !== undefined ? input.deleteRule : existing.deleteRule,
+        effectiveRules.listRule,
+        effectiveRules.viewRule,
+        effectiveRules.createRule,
+        effectiveRules.updateRule,
+        effectiveRules.deleteRule,
         JSON.stringify(input.options !== undefined ? input.options : existing.options),
+        JSON.stringify(compiledRules),
         existing.id,
       ),
   );

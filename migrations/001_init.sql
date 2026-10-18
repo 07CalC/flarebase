@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS _collections (
   createRule TEXT DEFAULT NULL,
   updateRule TEXT DEFAULT NULL,
   deleteRule TEXT DEFAULT NULL,
+  -- compiled artifacts for the rule text above (API_RULES.md §5); internal, never serialized
+  compiledRules JSON NOT NULL DEFAULT '{}',
 
   options JSON DEFAULT '{}' NOT NULL,
   createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -11,7 +11,6 @@ import * as sessionService from "../services/session.service";
 import { equalizeLoginTiming, verifyPassword } from "../lib/hash";
 import { generateJWT } from "../lib/jwt";
 import { isSuperusersCollection, sanitizeAuthRecord } from "../lib/auth";
-
 export const authRouter = new Hono<HonoApp>();
 
 authRouter.use("/*", collectionMiddleware);

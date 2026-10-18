@@ -111,54 +111,66 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
 ## Phase 3 — API rules engine
 
 > The biggest security-critical chunk: compile-time rule validation + runtime rule enforcement.
+>
+> **Authoritative spec:** [`API_RULES.md`](./API_RULES.md) — where this roadmap and the spec disagree, the spec wins (scope reviewed 2026-10-18).
 
-### 3.1 [ ] Rule syntax: lexer
+### 3.1 [x] Rule syntax: lexer
 
 - **Goal:** tokenize the PocketBase-flavored rule language into a token stream.
 - **Scope:**
-  - Token types: identifiers, `@request.*` / `@collection.*` macros, field access chains, string/number/boolean/`null` literals, operators (`=`, `!=`, `>`, `>=`, `<`, `<=`, `~`, `!~`, `?~`, `&&`, `||`, `!`), parens
+  - Token types: identifiers, `@request.*` macros, the `:isset`/`:changed` modifier suffixes, `@now`, string/number/boolean/`null` literals, operators (`=`, `!=`, `>`, `>=`, `<`, `<=`, `~`, `!~`, `&&`, `||`, `!`), parens; the `?`-family operators and `@collection.*` are lexed as reserved and rejected by the compiler
   - Position-tracked errors (`Unexpected token at line X col Y`) for later user-facing messages
 - **Files:** `src/api-rules/lexer.ts`
 - **Depends on:** nothing (can start in parallel with Phase 2)
 - **Acceptance:** unit tests covering valid/invalid token streams, position reporting.
 
-### 3.2 [ ] Rule syntax: parser + AST
+### 3.2 [x] Rule syntax: parser + AST
 
 - **Goal:** build an AST with clean error messages.
 - **Scope:**
   - Pratt or recursive-descent parser; precedence `(` `)` > unary `!` > comparison > `&&` > `||`
-  - AST node types exported for the compiler: `BinaryExpr`, `UnaryExpr`, `FieldRef`, `MacroRef`, `Literal`
+  - AST node types exported for the compiler: `BinaryExpr`, `UnaryExpr`, `FieldRef`, `MacroRef`, `NowRef`, `ModifierRef` (`:isset`/`:changed`), `Literal`
 - **Files:** `src/api-rules/parser.ts`
 - **Depends on:** 3.1
 - **Acceptance:** unit tests for precedence, associativity, parenthesization, malformed input errors.
 
-### 3.3 [ ] Compiler: validate + compile to SQL
+### 3.3 [x] Compiler: validate + compile to SQL
 
 - **Goal:** the "ahead of time evaluated" promise in ARCHITECTURE.md — rules become SQL fragments stored in `_collections` at save time, so request handling never parses rules.
 - **Scope:**
-  - Validate AST against the collection's fields (field names, types, relation field chains — e.g. `relationField.target.field` needs the referenced collection's metadata), `@request.auth.*`/`@request.body.*` macros
+  - Validate AST against the collection's fields (field names, types), `@request.auth.*`/`@request.body.*` macros, `@now` and the `:isset`/`:changed` modifiers; relation traversal (`relationField.target.field`) and `@collection.*` joins are deferred to 3.5
   - Produce a parameterized SQL fragment + bound value list; parameterized = injection-safe by construction
-  - Output format stored with the collection (design decision: JSON blob per action rule in `_collections`, e.g. `{ sql: "...", params: [...] }`) — keep storing the raw rule text too, so dashboards can edit rules later
-- **Files:** `src/api-rules/compiler.ts`, `src/services/collection.service.ts` (wire compilation into create/update), migration if a compiled-rules column is needed (`JSON NOT NULL DEFAULT '{}'` fits)
+  - Output format stored with the collection (spec: `compiledRules` JSON column, `{ sql: "...", slots: [...] }` per action) — keep storing the raw rule text too, so dashboards can edit rules later
+- **Files:** `src/api-rules/compiler.ts`, `src/services/collection.service.ts` (wire compilation into create/update), `migrations/001_init.sql` (`compiledRules JSON NOT NULL DEFAULT '{}'`, edited in place per pre-launch policy)
 - **Depends on:** 3.1, 3.2, and collection metadata shape from Phase 2
 - **Acceptance:**
   - collection create/update rejects invalid rules with 400 `VALIDATION_ERROR` and a readable message
-  - valid rules compile deterministically; compiler output unit-tested for the standard rule surface (id/email/fields, `@request.auth.id`, `@collection.*` joins)
+  - valid rules compile deterministically; compiler output unit-tested for the standard rule surface (id/email/fields, `@request.auth.id`, `@request.body.*`, `:isset`/`:changed`, `@now`)
 
 ### 3.4 [ ] Runtime rule enforcement in the records layer
 
 - **Goal:** every record action consults the compiled rule; superusers bypass.
 - **Scope:**
-  - Query builder merges compiled rule SQL into `WHERE` (get/one/update/delete compile as extra WHERE terms; list uses the same; create rules evaluated as pre-insert predicates on `@request.body.*` + auth macros)
-  - Semantics: `null` rule → superuser only; `''` → everyone; rule that only references `@request.auth.*` becomes a cheap constant fold
-  - Subquery pattern for user-scoped rows: `SELECT ... WHERE id IN (SELECT id FROM t WHERE <rule-sql>)` to keep table metadata decoupled from the rule
-  - Return 404 (not 403) for rule-filtered single-record reads/updates (pocketbase semantics)
+  - Query builder merges compiled rule SQL into `WHERE` (view/update/delete compile as extra `id = ? AND (<rule-sql>)` terms; list ANDs into the rows and count queries; create merges the predicate into `INSERT … SELECT … WHERE (<rule-sql>)`)
+  - Semantics: `null` rule → superuser only (403); `''` → everyone; expression false/NULL → list 200 partial, create 400, view/update/delete 404 (spec §2)
+  - Rules never add identifiers to SQL: field refs are compiled at save time, all request values are bound parameters
+  - Return 404 (not 403) for rule-filtered single-record reads/updates; locked rules are 403 (pocketbase semantics)
 - **Files:** `src/services/records.service.ts`, `src/routes/records.route.ts`
 - **Depends on:** 3.3, 2.2
 - **Acceptance:**
   - matrix tests: each of the 5 rule actions × (superuser / authed user matched by rule / authed user denied / anonymous attempted)
   - injection attempts in rule strings fail at compile time (no SQL injection possible through rules)
   - no rule parse/compile cost on the request hot path
+
+### 3.5 [ ] Rules v1.1: relation traversal and `@collection.*`
+
+- **Goal:** extend the rule language with `relationField.target.field` chains and `@collection.*` joins (deferred out of v1, see [API_RULES.md](./API_RULES.md) §9).
+- **Scope:**
+  - Compiler resolves referenced collection metadata (stable `collectionId`) and emits correlated subqueries for single-valued relations
+  - Cross-collection invalidation: collection rename/delete/field change recompiles (or rejects) every rule that references the affected collection; dependency list stored with the compiled artifact
+- **Files:** `src/api-rules/compiler.ts`, `src/services/collection.service.ts`
+- **Depends on:** 3.3, 3.4
+- **Acceptance:** chain/join rules compile deterministically; renaming or deleting a referenced collection keeps dependent artifacts correct (recompile or 400); enforcement covered by tests.
 
 ---
 

@@ -1,6 +1,6 @@
 # flarebase
 
-A pocketbase inspired (not drop-in replacement) backend-as-a-service (BaaS) designed for cloudflare workers. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the design and [ROADMAP.md](./ROADMAP.md) for the implementation plan.
+A pocketbase inspired (not drop-in replacement) backend-as-a-service (BaaS) designed for cloudflare workers. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the design, [ROADMAP.md](./ROADMAP.md) for the implementation plan and [API_RULES.md](./API_RULES.md) for the API rules specification.
 
 ## setup
 
