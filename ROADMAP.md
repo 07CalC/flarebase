@@ -10,6 +10,8 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
 
 `[ ]` not started · `[~]` in progress · `[x]` done
 
+> **Testing infra:** tests run inside the real Workers runtime via `@cloudflare/vitest-plugin` (`npm test`), with local D1 bindings and the migrations applied automatically. Storage isolation is per test file, so `tests/setup.ts` resets to a seeded baseline before each test; background work registered with `c.executionCtx.waitUntil` is drained deterministically via `waitOnExecutionContext`.
+
 ---
 
 ## Phase 1 — Foundation fixes
@@ -266,7 +268,7 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
 ### 8.2 [ ] Release polish
 
 - **Scope:**
-  - Full test suite green (`bun test`), `npm run typecheck` clean
+  - Full test suite green (`npm test`), `npm run typecheck` clean
   - `npm run deploy` against a real account verified end to end (auth → collections → records → files → realtime)
   - README update: environment setup, prod secret handling, API surface overview
 - **Acceptance:** documented, deployable from a clean checkout.

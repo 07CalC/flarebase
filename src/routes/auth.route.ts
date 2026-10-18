@@ -70,7 +70,9 @@ authRouter.post("/with-password", async (c) => {
     userAgent: c.req.header("user-agent") ?? null,
   });
 
-  // remove expired sessions in the backgroud, this is opportunistic and cannot (should not) fail the request
+  // opportunistic sweep of expired sessions; handed to the ExecutionContext
+  // so it cannot delay the response. purgeExpiredSessions is best-effort by
+  // design and never rejects.
   c.executionCtx.waitUntil(sessionService.purgeExpiredSessions(c.env.DB));
 
   return success(
@@ -93,7 +95,8 @@ authRouter.post("/refresh", async (c) => {
     return error(c, "Session does not belong to this collection", 403, ResponseCode.FORBIDDEN);
   }
 
-  await sessionService.purgeExpiredSessions(c.env.DB);
+  // same opportunistic sweep as login, off the response path
+  c.executionCtx.waitUntil(sessionService.purgeExpiredSessions(c.env.DB));
 
   const secret = requireJwtSecret(c.env);
   const ttlSeconds = resolveSessionTtlSeconds(c.env);

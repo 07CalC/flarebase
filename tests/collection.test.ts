@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it } from "vitest";
 import { generateJWT } from "../src/lib/jwt";
 import {
   createSession,
@@ -169,7 +169,7 @@ describe("POST /api/collections", () => {
         ],
       },
     });
-    const cols = tableInfo(ctx.raw, "posts");
+    const cols = await tableInfo(ctx.db, "posts");
     const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
     expect(byName["id"].type).toBe("TEXT");
     expect(byName["id"].pk).toBe(1);
@@ -213,7 +213,7 @@ describe("POST /api/collections", () => {
     expect(res.body.data.indexes).toEqual([
       { name: "idx_posts_title", on: "title" },
     ]);
-    expect(indexNames(ctx.raw)).toContain("idx_posts_title");
+    expect(await indexNames(ctx.db)).toContain("idx_posts_title");
   });
 
   it("creates unique indexes and enforces them", async () => {
@@ -225,8 +225,10 @@ describe("POST /api/collections", () => {
       },
     });
     expect(res.status).toBe(201);
-    ctx.raw.run(`INSERT INTO "posts" (slug) VALUES ('a')`);
-    expect(() => ctx.raw.run(`INSERT INTO "posts" (slug) VALUES ('a')`)).toThrow();
+    await ctx.db.prepare(`INSERT INTO "posts" (slug) VALUES ('a')`).run();
+    await expect(
+      ctx.db.prepare(`INSERT INTO "posts" (slug) VALUES ('a')`).run(),
+    ).rejects.toThrow();
   });
 
   it("applies field defaults on insert", async () => {
@@ -241,8 +243,10 @@ describe("POST /api/collections", () => {
         ],
       },
     });
-    ctx.raw.run(`INSERT INTO "posts" (title) VALUES ('x')`);
-    const row = ctx.raw.query(`SELECT views, active, label FROM "posts"`).get() as any;
+    await ctx.db.prepare(`INSERT INTO "posts" (title) VALUES ('x')`).run();
+    const row = (await ctx.db
+      .prepare(`SELECT views, active, label FROM "posts"`)
+      .first()) as any;
     expect(row.views).toBe(5);
     expect(row.active).toBe(1);
     expect(row.label).toBe("hi");
@@ -289,7 +293,7 @@ describe("POST /api/collections", () => {
       });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe("VALIDATION_ERROR");
-      expect(tableNames(ctx.raw)).not.toContain(name);
+      expect(await tableNames(ctx.db)).not.toContain(name);
     });
   }
 
@@ -356,7 +360,7 @@ describe("POST /api/collections", () => {
       },
     });
     expect(res.status).toBe(400);
-    expect(tableNames(ctx.raw)).not.toContain("members");
+    expect(await tableNames(ctx.db)).not.toContain("members");
   });
 
   it("auth collection without password -> 400", async () => {
@@ -383,7 +387,7 @@ describe("POST /api/collections", () => {
     });
     expect(res.status).toBe(201);
     expect(res.body.data.type).toBe("auth");
-    const cols = tableInfo(ctx.raw, "members").map((c) => c.name);
+    const cols = (await tableInfo(ctx.db, "members")).map((c) => c.name);
     expect(cols).toContain("email");
     expect(cols).toContain("password");
   });
@@ -415,7 +419,7 @@ describe("POST /api/collections", () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
-    expect(tableNames(ctx.raw)).not.toContain("x");
+    expect(await tableNames(ctx.db)).not.toContain("x");
   });
 
   it("index on system column id is allowed", async () => {
@@ -427,11 +431,11 @@ describe("POST /api/collections", () => {
       },
     });
     expect(res.status).toBe(201);
-    expect(indexNames(ctx.raw)).toContain("idx_x_id");
+    expect(await indexNames(ctx.db)).toContain("idx_x_id");
   });
 
   it("pre-existing table with the same name -> 500, no metadata row", async () => {
-    ctx.raw.exec(`CREATE TABLE clash (id TEXT)`);
+    await ctx.db.prepare(`CREATE TABLE clash (id TEXT)`).run();
     const res = await superApi(ctx, "POST", "/api/collections", {
       body: { name: "clash", fields: [{ name: "a", type: "text" }] },
     });
@@ -562,16 +566,18 @@ describe("PATCH /api/collections/:id", () => {
       body: { name: "notes", fields: [{ name: "title", type: "text" }] },
     });
     const id = created.body.data.id;
-    ctx.raw.run(`INSERT INTO "notes" (title) VALUES ('hello')`);
+    await ctx.db.prepare(`INSERT INTO "notes" (title) VALUES ('hello')`).run();
     const res = await superApi(ctx, "PATCH", `/api/collections/${id}`, {
       body: { name: "memos" },
     });
     expect(res.status).toBe(200);
     expect(res.body.data.name).toBe("memos");
     expect(res.body.data.id).toBe(id);
-    expect(tableNames(ctx.raw)).toContain("memos");
-    expect(tableNames(ctx.raw)).not.toContain("notes");
-    const row = ctx.raw.query(`SELECT title FROM "memos"`).get() as any;
+    expect(await tableNames(ctx.db)).toContain("memos");
+    expect(await tableNames(ctx.db)).not.toContain("notes");
+    const row = (await ctx.db
+      .prepare(`SELECT title FROM "memos"`)
+      .first()) as any;
     expect(row.title).toBe("hello");
     expect((await superApi(ctx, "GET", "/api/collections/notes")).status).toBe(404);
     expect((await superApi(ctx, "GET", "/api/collections/memos")).status).toBe(200);
@@ -613,7 +619,7 @@ describe("PATCH /api/collections/:id", () => {
     const created = await superApi(ctx, "POST", "/api/collections", {
       body: { name: "posts", fields: [{ name: "title", type: "text" }] },
     });
-    ctx.raw.run(`INSERT INTO "posts" (title) VALUES ('old')`);
+    await ctx.db.prepare(`INSERT INTO "posts" (title) VALUES ('old')`).run();
     const res = await superApi(ctx, "PATCH", `/api/collections/${created.body.data.id}`, {
       body: {
         fields: [
@@ -625,10 +631,12 @@ describe("PATCH /api/collections/:id", () => {
     });
     expect(res.status).toBe(200);
     expect(res.body.data.fields.map((f: any) => f.name)).toEqual(["title", "views", "tag"]);
-    const cols = tableInfo(ctx.raw, "posts").map((c) => c.name);
+    const cols = (await tableInfo(ctx.db, "posts")).map((c) => c.name);
     expect(cols).toContain("views");
     expect(cols).toContain("tag");
-    const row = ctx.raw.query(`SELECT views, tag FROM "posts"`).get() as any;
+    const row = (await ctx.db
+      .prepare(`SELECT views, tag FROM "posts"`)
+      .first()) as any;
     expect(row.views).toBe(0);
     expect(row.tag).toBe("");
   });
@@ -646,10 +654,14 @@ describe("PATCH /api/collections/:id", () => {
       },
     });
     expect(res.status).toBe(200);
-    ctx.raw.run(`INSERT INTO "posts" (title, slug) VALUES ('a', 's1')`);
-    expect(() =>
-      ctx.raw.run(`INSERT INTO "posts" (title, slug) VALUES ('b', 's1')`),
-    ).toThrow();
+    await ctx.db
+      .prepare(`INSERT INTO "posts" (title, slug) VALUES ('a', 's1')`)
+      .run();
+    await expect(
+      ctx.db
+        .prepare(`INSERT INTO "posts" (title, slug) VALUES ('b', 's1')`)
+        .run(),
+    ).rejects.toThrow();
   });
 
   it("removed fields leave the column in place but drop from metadata", async () => {
@@ -662,14 +674,16 @@ describe("PATCH /api/collections/:id", () => {
         ],
       },
     });
-    ctx.raw.run(`INSERT INTO "posts" (title, gone) VALUES ('t', 'g')`);
+    await ctx.db.prepare(`INSERT INTO "posts" (title, gone) VALUES ('t', 'g')`).run();
     const res = await superApi(ctx, "PATCH", `/api/collections/${created.body.data.id}`, {
       body: { fields: [{ name: "title", type: "text" }] },
     });
     expect(res.status).toBe(200);
     expect(res.body.data.fields.map((f: any) => f.name)).toEqual(["title"]);
-    expect(tableInfo(ctx.raw, "posts").map((c) => c.name)).toContain("gone");
-    const row = ctx.raw.query(`SELECT gone FROM "posts"`).get() as any;
+    expect((await tableInfo(ctx.db, "posts")).map((c) => c.name)).toContain("gone");
+    const row = (await ctx.db
+      .prepare(`SELECT gone FROM "posts"`)
+      .first()) as any;
     expect(row.gone).toBe("g");
   });
 
@@ -761,7 +775,7 @@ describe("PATCH /api/collections/:id", () => {
       body: { indexes: [{ name: "idx_posts_title", on: "title" }] },
     });
     expect(res.status).toBe(200);
-    expect(indexNames(ctx.raw)).toContain("idx_posts_title");
+    expect(await indexNames(ctx.db)).toContain("idx_posts_title");
   });
 
   it("rename plus new field in one request", async () => {
@@ -779,7 +793,7 @@ describe("PATCH /api/collections/:id", () => {
     });
     expect(res.status).toBe(200);
     expect(res.body.data.name).toBe("memos");
-    expect(tableInfo(ctx.raw, "memos").map((c) => c.name)).toContain("views");
+    expect((await tableInfo(ctx.db, "memos")).map((c) => c.name)).toContain("views");
   });
 
   it("invalid update payload (bad field type) -> 400", async () => {
@@ -814,7 +828,7 @@ describe("DELETE /api/collections/:id", () => {
     expect(res.body.data.id).toBe(id);
     expect(res.body.data.name).toBe("posts");
     expect((await superApi(ctx, "GET", `/api/collections/${id}`)).status).toBe(404);
-    expect(tableNames(ctx.raw)).not.toContain("posts");
+    expect(await tableNames(ctx.db)).not.toContain("posts");
   });
 
   it("deletes by name as well as id", async () => {
@@ -823,7 +837,7 @@ describe("DELETE /api/collections/:id", () => {
     });
     const res = await superApi(ctx, "DELETE", "/api/collections/posts");
     expect(res.status).toBe(200);
-    expect(tableNames(ctx.raw)).not.toContain("posts");
+    expect(await tableNames(ctx.db)).not.toContain("posts");
   });
 
   it("missing collection -> 404", async () => {
@@ -836,7 +850,7 @@ describe("DELETE /api/collections/:id", () => {
     const res = await superApi(ctx, "DELETE", "/api/collections/_superusers");
     expect(res.status).toBe(400);
     expect((await superApi(ctx, "GET", "/api/collections/_superusers")).status).toBe(200);
-    expect(tableNames(ctx.raw)).toContain("_superusers");
+    expect(await tableNames(ctx.db)).toContain("_superusers");
   });
 
   it("deleting an auth collection cleans up its sessions", async () => {
@@ -890,6 +904,6 @@ describe("DELETE /api/collections/:id", () => {
       body: { name: "posts", fields: [{ name: "b", type: "number" }] },
     });
     expect(second.status).toBe(201);
-    expect(tableInfo(ctx.raw, "posts").map((c) => c.name)).toContain("b");
+    expect((await tableInfo(ctx.db, "posts")).map((c) => c.name)).toContain("b");
   });
 });

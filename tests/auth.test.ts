@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, it } from "bun:test";
-import { api, setupTest, TEST_SECRET, type TestContext } from "./setup";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  api,
+  apiWithEnv,
+  setupTest,
+  TEST_SECRET,
+  type TestContext,
+} from "./setup";
 import { generateJWT, verifyJWT } from "../src/lib/jwt";
 import {
   getSessionByJti,
@@ -194,21 +200,11 @@ describe("POST /api/collections/:collectionName/auth/with-password", () => {
   });
 
   it("fails fast with a clear error when JWT_SECRET is missing", async () => {
-    const res = await ctx.app.request(
-      LOGIN_USERS,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: "user@example.com",
-          password: TEST_PASSWORD,
-        }),
-      },
-      envWithoutJwtSecret(),
-    );
-    const body = await res.json();
+    const res = await apiWithEnv(envWithoutJwtSecret(), "POST", LOGIN_USERS, {
+      body: { email: "user@example.com", password: TEST_PASSWORD },
+    });
     expect(res.status).toBe(500);
-    expect((body as any).message).toContain("JWT_SECRET is not set");
+    expect(res.body.message).toContain("JWT_SECRET is not set");
   });
 });
 

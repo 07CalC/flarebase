@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it } from "vitest";
 import { verifyPassword } from "../src/lib/hash";
 import { generateJWT } from "../src/lib/jwt";
 import { createSession } from "../src/services/session.service";
@@ -13,14 +13,14 @@ const START_URL = "/api/collections/_superusers/records";
 
 // setupTest seeds exactly one superuser (su1); bootstrap tests run against an
 // empty _superusers table to be inside the "initial setup" window
-function clearSuperusers() {
-  ctx.raw.exec(`DELETE FROM _superusers`);
+async function clearSuperusers() {
+  await ctx.db.prepare(`DELETE FROM _superusers`).run();
 }
 
 describe("POST /api/collections/_superusers/records", () => {
   describe("bootstrap (no superusers exist)", () => {
     it("anyone can create the first superuser without auth", async () => {
-      clearSuperusers();
+      await clearSuperusers();
       const res = await api(ctx, "POST", START_URL, {
         body: { email: "first@flarebase.dev", password: "supersecret1" },
       });
@@ -33,9 +33,9 @@ describe("POST /api/collections/_superusers/records", () => {
       expect(res.body.data).not.toHaveProperty("password");
 
       // stored under our salted scheme, and it verifies
-      const row = ctx.raw
-        .query(`SELECT password FROM _superusers WHERE email = 'first@flarebase.dev'`)
-        .get() as { password: string } | null;
+      const row = (await ctx.db
+        .prepare(`SELECT password FROM _superusers WHERE email = 'first@flarebase.dev'`)
+        .first()) as { password: string } | null;
       expect(row).not.toBeNull();
       expect(row!.password.startsWith("pbkdf2$")).toBe(true);
       expect(await verifyPassword(row!.password, "supersecret1")).toBe(true);
@@ -43,7 +43,7 @@ describe("POST /api/collections/_superusers/records", () => {
     });
 
     it("an authenticated non-superuser can also bootstrap while the table is empty", async () => {
-      clearSuperusers();
+      await clearSuperusers();
       const res = await api(ctx, "POST", START_URL, {
         token: ctx.userToken,
         body: { email: "first@flarebase.dev", password: "supersecret1" },
@@ -58,7 +58,9 @@ describe("POST /api/collections/_superusers/records", () => {
       expect(res.status).toBe(403);
       expect(res.body.code).toBe("FORBIDDEN");
       expect(res.body.error).toBe("Only superusers can create superusers");
-      const count = (ctx.raw.query(`SELECT COUNT(*) as c FROM _superusers`).get() as any).c;
+      const count = ((await ctx.db
+        .prepare(`SELECT COUNT(*) as c FROM _superusers`)
+        .first()) as any).c;
       expect(count).toBe(1);
     });
 
@@ -73,7 +75,7 @@ describe("POST /api/collections/_superusers/records", () => {
 
   describe("management (superusers exist)", () => {
     async function loginAsFirstSuperuser(): Promise<string> {
-      clearSuperusers();
+      await clearSuperusers();
       const first = await api(ctx, "POST", START_URL, {
         body: { email: "first@flarebase.dev", password: "supersecret1" },
       });
@@ -100,7 +102,9 @@ describe("POST /api/collections/_superusers/records", () => {
       });
       expect(res.status).toBe(201);
       expect(res.body.data).not.toHaveProperty("password");
-      const count = (ctx.raw.query(`SELECT COUNT(*) as c FROM _superusers`).get() as any).c;
+      const count = ((await ctx.db
+        .prepare(`SELECT COUNT(*) as c FROM _superusers`)
+        .first()) as any).c;
       expect(count).toBe(2);
     });
 

@@ -40,6 +40,16 @@ Session TTL can be overridden per deployment by setting `SESSION_TTL_SECONDS` un
 
 ## development notes
 
+Tests run inside the real Workers runtime (workerd) via `@cloudflare/vitest-plugin`:
+
+```txt
+npm test          # single run
+npm run test:watch # watch mode
+npm run typecheck  # workers + tests projects
+```
+
+The suite calls `src/index.ts` through `worker.fetch(request, env, ctx)` with a real `ExecutionContext` (so `waitUntil` behaves exactly like production), uses local D1 bindings with the migrations applied automatically, and resets the database to a seeded baseline before each test.
+
 [For generating/synchronizing types based on your Worker configuration run](https://developers.cloudflare.com/workers/wrangler/commands/#types):
 
 ```txt

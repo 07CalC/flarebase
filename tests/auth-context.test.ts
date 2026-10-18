@@ -1,11 +1,21 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it } from "vitest";
 import { Hono } from "hono";
+import { env } from "cloudflare:workers";
+import {
+  createExecutionContext,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import type { HonoApp } from "../src/config";
 import { authMiddleware } from "../src/middleware/auth";
 import { generateJWT } from "../src/lib/jwt";
 import { createSession } from "../src/services/session.service";
 import { createCollection } from "../src/services/collection.service";
-import { setupTest, TEST_SECRET, type TestContext } from "./setup";
+import {
+  IncomingRequest,
+  setupTest,
+  TEST_SECRET,
+  type TestContext,
+} from "./setup";
 
 let ctx: TestContext;
 beforeEach(async () => {
@@ -25,16 +35,14 @@ async function callProbe(
   probe: Hono<HonoApp>,
   token?: string,
 ): Promise<{ auth: any }> {
-  const env = { DB: ctx.db, JWT_SECRET: TEST_SECRET } as unknown as CloudflareBindings;
-  const res = await probe.request(
-    "/",
-    {
-      method: "GET",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    },
-    env,
-  );
-  return res.json();
+  const request = new IncomingRequest("http://flarebase.test/", {
+    method: "GET",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  const executionCtx = createExecutionContext();
+  const res = await probe.fetch(request, env, executionCtx);
+  await waitOnExecutionContext(executionCtx);
+  return res.json() as Promise<{ auth: any }>;
 }
 
 describe("auth middleware context", () => {

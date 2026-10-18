@@ -7,7 +7,6 @@ import { superuserRouter } from "./routes/superusers.route";
 import { authMiddleware } from "./middleware/auth";
 import { authRouter } from "./routes/auth.route";
 import { sessionRouter } from "./routes/session.route";
-import { collectionMiddleware } from "./middleware/collection";
 
 const app = new Hono<HonoApp>();
 
@@ -20,6 +19,9 @@ app.onError((err, c) => {
   if (err instanceof AppError) {
     return c.json({ message: err.message, data: null, error: err.message, code: err.code }, err.statusCode)
   }
+  // never swallow unexpected errors: without this line a 500 is
+  // undiagnosable (workers log to stderr / tail logs)
+  console.error("unhandled error:", err);
   return c.json({
     message: "Internal Server Error",
     data: null,
