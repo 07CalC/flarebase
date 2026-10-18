@@ -17,7 +17,11 @@ import * as collectionService from "../services/collection.service";
 export const collectionRouter = new Hono<HonoApp>();
 
 // authentication runs globally on the root app; this router only requires
-// the caller to be a superuser for collection management
+// the caller to be a superuser for collection management.
+// use("/*") is load-bearing: use("/") would silently leave `GET/PATCH/DELETE
+// /:id` unguarded. The /api/collections/_superusers sub-router is mounted
+// BEFORE this router in src/index.ts so a terminal match there short-circuits
+// this wildcard without breaking the superuser bootstrap flow.
 collectionRouter.use("/*", superUserRequired);
 
 async function readJsonBody(c: Context<HonoApp>): Promise<unknown> {

@@ -10,8 +10,6 @@ export interface SessionRow {
   createdAt: string;
 }
 
-
-
 export async function createSession(
   db: D1Database,
   input: { collectionId: string; userId: string; jti: string; expiresAt: number; ip?: string | null; userAgent?: string | null },

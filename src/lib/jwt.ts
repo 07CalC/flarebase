@@ -1,6 +1,5 @@
 import { sign, verify } from "hono/jwt";
 
-
 export type JwtPayload = {
   sub: string;
   collectionId?: string;

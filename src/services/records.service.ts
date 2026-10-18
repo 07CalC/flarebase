@@ -1,3 +1,5 @@
+import { mapD1Error } from "../lib/d1-error";
+import { buildCreateRecordIfEmptyQuery, buildCreateRecordQuery } from "../lib/sql-query";
 import { Collection, getNonHiddenCollectionField } from "./collection.service";
 
 
@@ -50,17 +52,24 @@ export async function countRecords(db: D1Database, collection: Collection) {
 }
 
 export async function createRecord(db: D1Database, collection: Collection, data: Record<string, any>) {
-  const fields = getNonHiddenCollectionField(collection);
-  const fieldNames = fields.map(f => `"${f.name}"`);
-  const placeholders = fields.map((_, index) => `?${index + 1}`);
-  const values = fields.map(f => data[f.name]);
+  try {
+    const { query, values } = buildCreateRecordQuery(collection, data);
+    const result = await db.prepare(query).bind(...values).first();
+    return result || null;
+  } catch (error) {
+    mapD1Error(error);
+  }
+}
 
-  const query = `
-    INSERT INTO "${collection.name}" (${fieldNames.join(", ")})
-    VALUES (${placeholders.join(", ")})
-    RETURNING *
-  `;
-  const result = await db.prepare(query).bind(...values).first();
-  return result || null;
+export async function createRecordOnlyIfEmpty(db: D1Database, collection: Collection, data: Record<string, any>) {
+  try {
+    const { query, values } = buildCreateRecordIfEmptyQuery(collection, data);
+    const result = await db.prepare(query).bind(...values).first();
+    // null means the table already has rows (or got one concurrently),
+    // the caller decides how to surface that
+    return result || null;
+  } catch (error) {
+    mapD1Error(error);
+  }
 }
 
