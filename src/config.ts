@@ -1,3 +1,4 @@
+import { Collection } from "./services/collection.service";
 
 export type Bindings = {
 
@@ -18,6 +19,7 @@ export type AuthContext = {
 
 export type Variables = {
   auth: AuthContext | null;
+  collectionContext: Collection | null;
 }
 
 export type HonoApp = {

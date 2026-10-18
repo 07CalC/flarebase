@@ -1,23 +1,15 @@
-import { Context, Hono } from "hono";
+import { Hono } from "hono";
 import { HonoApp } from "../config";
 import * as collectionService from "../services/collection.service"
 import * as recordService from "../services/records.service"
-import { z } from "zod"
 import { AppError, error, success, ResponseCode } from "../lib/response";
 import { SUPERUSERS_COLLECTION, sanitizeAuthRecord } from "../lib/auth";
 import { formatZodIssues } from "../lib/collection";
 import { buildRecordCreateSchema } from "../lib/record-schema";
+import { readJsonBody } from "../lib/request";
 import { hashPassword } from "../lib/hash";
 
 export const superuserRouter = new Hono<HonoApp>();
-
-async function readJsonBody(c: Context<HonoApp>): Promise<unknown> {
-  try {
-    return await c.req.json();
-  } catch {
-    throw new AppError("Invalid JSON body", 400, ResponseCode.INVALID_REQUEST);
-  }
-}
 
 superuserRouter.post("/records", async (c) => {
   const collectionRecord = await collectionService.getAuthCollectionByName(c.env.DB, SUPERUSERS_COLLECTION);

@@ -10,8 +10,13 @@ import { createCollection } from "../src/services/collection.service";
 // (global authMiddleware etc.)
 import app from "../src/index";
 import { createTestDb, type RawDatabase } from "./d1-shim";
+import { hashPassword } from "../src/lib/hash";
 
 export const TEST_SECRET = "test-secret-for-collection-tests";
+
+// seeded account passwords are stored as real PBKDF2 hashes (the literal
+// "hashed-password" is the plaintext to use in login flows)
+const TEST_PASSWORD_HASH = await hashPassword("hashed-password");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -37,7 +42,7 @@ export async function setupTest(): Promise<TestContext> {
     .prepare(
       `INSERT INTO _superusers (id, email, password) VALUES (?1, ?2, ?3)`,
     )
-    .bind("su1", "admin@example.com", "hashed-password")
+    .bind("su1", "admin@example.com", TEST_PASSWORD_HASH)
     .run();
 
   const su = await generateJWT(
@@ -62,7 +67,7 @@ export async function setupTest(): Promise<TestContext> {
 
   await db
     .prepare(`INSERT INTO "users" (id, email, password) VALUES (?1, ?2, ?3)`)
-    .bind("u1", "user@example.com", "hashed-password")
+    .bind("u1", "user@example.com", TEST_PASSWORD_HASH)
     .run();
 
   const u = await generateJWT(

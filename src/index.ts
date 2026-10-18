@@ -5,6 +5,9 @@ import { AppError, ResponseCode } from "./lib/response";
 import { collectionRouter } from "./routes/collection.route";
 import { superuserRouter } from "./routes/superusers.route";
 import { authMiddleware } from "./middleware/auth";
+import { authRouter } from "./routes/auth.route";
+import { sessionRouter } from "./routes/session.route";
+import { collectionMiddleware } from "./middleware/collection";
 
 const app = new Hono<HonoApp>();
 
@@ -29,13 +32,15 @@ app.get('/api/health', (c) => {
   return c.json({ message: 'ok', data: { status: 'ok' }, error: null, code: ResponseCode.SUCCESS }, 200);
 });
 
-// _superusers router MUST be mounted before the collections router: its
+// _superusers and records router MUST be mounted before the collections router: its
 // literal mount wins first-match over collectionRouter's use("/*")
 // superuser-required wildcard, keeping the first-superuser bootstrap open
 // while normal collection management stays guarded
+app.route('/api/auth', sessionRouter);
 app.route('/api/collections/_superusers', superuserRouter);
-app.route('/api/collections', collectionRouter);
 app.route('/api/collections/:collectionName/records', recordsRouter);
+app.route('/api/collections/:collectionName/auth', authRouter)
+app.route('/api/collections', collectionRouter);
 
 app.notFound((c) => {
   return c.json({ message: null, data: null, error: 'Not Found', code: ResponseCode.NOT_FOUND }, 404);

@@ -60,22 +60,26 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
 
 ## Phase 2 — Auth & records (core product)
 
-### 2.1 [ ] Auth endpoints
+### 2.1 [x] Auth endpoints
 
-- **Goal:** real authentication: superuser bootstrap, password login for any auth collection, logout.
-- **Scope:**
-  - `POST /api/collections/_superusers/auth-with-password` — first-superuser bootstrap is open ONLY while `_superusers` is empty (per ARCHITECTURE); after that, normal auth-password flow
-  - `POST /api/collections/:collectionNameOrId/auth-with-password` — generic `authWithPassword` for every `type: "auth"` collection: validate email+password, `verifyPassword`, create `_sessions` row, issue JWT (`sub`, `collectionId`, `jti`, `exp`), return sanitized user + token
-  - `POST /api/auth/logout` (or delete-session route) — revoke current session by `jti`
-  - Expired-session cleanup (delete stale `_sessions` rows opportunistically on auth actions)
-  - Recover/adapt from `git show df48d48:src/modules/auth/*` (routes/service/repo) merged into `src/routes/auth.route.ts` + `src/services/auth.service.ts`
-- **Files:** `src/routes/auth.route.ts` (new), `src/services/auth.service.ts` (new), `src/services/session.service.ts`, migrations if schema tweaks needed
+- **Goal:** real authentication: superuser bootstrap, password login for any auth collection, logout, session refresh, stale-session cleanup.
+- **Done:**
+  - `POST /api/collections/:collectionName/auth/with-password` — generic login for every `type: "auth"` collection (including `_superusers`): verifies email+password via `verifyPassword`, creates the `_sessions` row (`jti`/`exp` from a single `generateJWT` call so token and row cannot drift, TTL from `resolveSessionTtlSeconds`), returns sanitized user + token. Response sanitization strips `password` and hidden fields (`sanitizeAuthRecord(record, fields)`)
+  - Failed lookups equalize timing (`equalizeLoginTiming` dummy-hash verify in `lib/hash.ts`) so login latency does not leak valid emails
+  - `readJsonBody`/`formatZodIssues` conventions applied; `requireJwtSecret` fails fast on misconfig; `getRecordByField` and `createSession`/`revokeSession` flow through `mapD1Error`
+  - the legacy `POST /api/collections/_superusers/auth-with-password` handler was folded into the generic route and removed from `superusers.route.ts`
+  - superuser bootstrap stays on `POST /api/collections/_superusers/records` (race-safe guarded insert, 1.x)
+  - **Session refresh** (rotation): `POST /api/collections/:collectionName/auth/refresh` — requires a live token of the same collection (401 anonymous / 403 cross-collection); creates the replacement session FIRST, then revokes the old `jti`, so a failed rotation never logs the caller out; returns a freshly-fetched sanitized row (not the middleware snapshot); rotation is one-way (old token cannot refresh again)
+  - **Logout**: `POST /api/auth/logout` (mounted at `/api/auth`, deliberately not collection-scoped — the token is self-describing via its `jti`); revokes via `auth.sessionId`; idempotent; 401 when unauthenticated
+  - **Stale-session cleanup**: `purgeExpiredSessions` (`DELETE FROM _sessions WHERE expiresAt <= now`, best-effort, failures swallowed) runs opportunistically on login + refresh; `idx_sessions_expires` added to migrations 002 (DDL + seed metadata). Revoked-but-unexpired rows are never purged early — their tokens stay rejected until the expiry passes
+  - login logic kept inline in `src/routes/auth.route.ts`; extract `src/services/auth.service.ts` later if the surface grows
+  - tests at `tests/auth.test.ts`: known-user + `_superusers` login, live session-row assertions, wrong password / unknown email / revoked session / expired JWT / non-auth collection / malformed JSON / missing JWT_SECRET, hidden-field stripping, token works end-to-end through `authMiddleware`, refresh rotation + freshness + one-way semantics, logout flow, purge invariants (expired deleted; live and revoked-but-unexpired kept)
 - **Depends on:** 1.1 (hashing), 1.2 (global middleware), 1.3 (config)
 - **Acceptance:**
-  - login with wrong email / wrong password / revoked session / expired JWT → 401-400 family with correct codes
-  - bootstrap: works when zero superusers, 403 afterward
-  - issued token works with `authMiddleware` end-to-end (context populated)
-  - tests at `tests/auth.test.ts` mirroring the auth-test style of `collection.test.ts`
+  - login with wrong email / wrong password / revoked session / expired JWT → 401-400 family with correct codes ✅
+  - bootstrap: works when zero superusers, 403 afterward ✅ (tested at `tests/superusers.test.ts`)
+  - issued token works with `authMiddleware` end-to-end (context populated) ✅
+  - tests at `tests/auth.test.ts` mirroring the auth-test style of `collection.test.ts` ✅
 
 ### 2.2 [~] Records CRUD
 

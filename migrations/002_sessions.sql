@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS _sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_jti ON _sessions(jti);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON _sessions(collectionId, userId);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON _sessions(expiresAt);
 
 INSERT INTO _collections(id, name, system, type, fields, indexes, listRule, viewRule, createRule, updateRule, deleteRule, options) VALUES
   ('_sessions', '_sessions', 1, 'base', '[
@@ -26,6 +27,7 @@ INSERT INTO _collections(id, name, system, type, fields, indexes, listRule, view
   ]', 
   '[
   {"name": "idx_sessions_jti", "on": "jti"},
-  {"name": "idx_sessions_user", "on": ["collectionId", "userId"]}
+  {"name": "idx_sessions_user", "on": ["collectionId", "userId"]},
+  {"name": "idx_sessions_expires", "on": "expiresAt"}
   ]'
   , null, null, null, null, null,'{}');

@@ -40,6 +40,17 @@ export async function verifyPassword(
   return timingSafeEqual(computed, parsed.key);
 }
 
+//
+// an unknown email returns without running the pbkdf2 key derivation, while a known email pays ~DEFAULT_ITERATIONS of key derivation, so response latency would reveal which emails exist. Running a real verify against a cached dummy hash burns comparable CPU on the unknown-user path.
+let dummyHashPromise: Promise<string> | null = null;
+
+export async function equalizeLoginTiming(password: string): Promise<void> {
+  if (dummyHashPromise === null) {
+    dummyHashPromise = hashPassword("flarebase-timing-equalizer");
+  }
+  await verifyPassword(await dummyHashPromise, password);
+}
+
 async function deriveKey(
   password: string,
   salt: Uint8Array,
@@ -92,8 +103,6 @@ function parseHash(storedHash: string): ParsedHash | null {
   } catch {
     return null;
   }
-  // the stored digest must be exactly what our scheme produces; shorter or
-  // longer keys indicate a foreign hash, not a failed password check
   if (salt.length < MIN_SALT_BYTES || key.length * 8 !== KEY_BITS) {
     return null;
   }

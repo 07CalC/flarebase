@@ -1,4 +1,5 @@
 import { mapD1Error } from "../lib/d1-error";
+import { AppError, ResponseCode } from "../lib/response";
 import { buildCreateRecordIfEmptyQuery, buildCreateRecordQuery } from "../lib/sql-query";
 import { Collection, getNonHiddenCollectionField } from "./collection.service";
 
@@ -67,6 +68,28 @@ export async function createRecordOnlyIfEmpty(db: D1Database, collection: Collec
     const result = await db.prepare(query).bind(...values).first();
     // null means the table already has rows (or got one concurrently),
     // the caller decides how to surface that
+    return result || null;
+  } catch (error) {
+    mapD1Error(error);
+  }
+}
+
+export async function getRecordByField(db: D1Database, collection: Collection, fieldName: string, fieldValue: any) {
+  const field = collection.fields.find((f) => f.name === fieldName);
+  if (!field) {
+    // callers only pass trusted metadata derived field names
+    // a missing one means corrupt collection metadata, same category as schema drift
+    throw new AppError(
+      `Field "${fieldName}" does not exist in collection "${collection.name}"`,
+      500,
+      ResponseCode.INTERNAL_SERVER_ERROR,
+    );
+  }
+  try {
+    const query = `
+      SELECT * FROM "${collection.name}" WHERE "${fieldName}" = ?1
+    `;
+    const result = await db.prepare(query).bind(fieldValue).first();
     return result || null;
   } catch (error) {
     mapD1Error(error);

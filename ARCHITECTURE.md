@@ -47,6 +47,12 @@ the authorization is handled by the `api rules` which are stored in the `_collec
 
 each incoming request is populated wih the user information (if applicable) before the hitting any route. this is done by the `auth` middleware which checks the request for a valid session and populates the request with the user information if the session is valid.
 
+sessions are the source of truth for issued tokens: a token is only usable while its `_sessions` row exists (matched by the token's `jti`), is not revoked, and is not expired. the lifecycle:
+- login (`POST /api/collections/:collectionName/auth/with-password`) verifies the credentials, registers a session row (`jti`, `expiresAt`), and returns the token
+- refresh (`POST /api/collections/:collectionName/auth/refresh`) rotates the session: the replacement session is created first, then the old `jti` is revoked, so a failed rotation never logs the caller out
+- logout (`POST /api/auth/logout`) revokes the current session; revocation is idempotent and collection-independent because the token is self-describing
+- expired rows are purged opportunistically on login and refresh; revoked-but-unexpired rows are never purged early so their tokens stay rejected
+
 api rules are ahead of time evaluated and stored in the `_collections` collection. this means that the rules are evaluated when the collection is created or updated and not when the request is made. this allows for faster request processing since the rules are already evaluated and stored in the database. the sql queries are generated based on the rules and are executed directly on the database without any additional processing.
 
 **superusers** collection is also auth type system collection which is used to store the superuser accounts. superusers have full access to all collections and can perform any action on any collection. superusers can be created, updated and deleted using the flarebase dashboard or the api by other superusers.
