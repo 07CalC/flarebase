@@ -23,8 +23,10 @@ CREATE TABLE IF NOT EXISTS _collections (
 
 CREATE INDEX IF NOT EXISTS idx_collections_name ON _collections(name);
 
+-- field metadata carries the per-field validation options (min/max etc.),
+-- which the record routes turn into runtime request validation schemas
 INSERT INTO _collections (id, name, system, type, fields, indexes, listRule, viewRule, createRule, updateRule, deleteRule, options) VALUES
-  ('_superusers', '_superusers', 1, 'auth', '[{"name":"email","type":"text","required":true,"unique":true},{"name":"password","type":"text","required":true}]', '[{"name": "idx_superusers_email", "on": "email"}]', null, null, null, null, null, '{}');
+  ('_superusers', '_superusers', 1, 'auth', '[{"name":"email","type":"email","required":true,"unique":true,"max":254},{"name":"password","type":"text","required":true,"min":8,"max":128}]', '[{"name": "idx_superusers_email", "on": "email"}]', null, null, null, null, null, '{}');
 
 CREATE TABLE IF NOT EXISTS _superusers (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(5)))),

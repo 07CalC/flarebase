@@ -16,6 +16,8 @@ A pocketbase inspired (not drop in replacement) backend-as-a-service (BaaS) desi
 
 Everything in flarebase is a collection. collections are just a sqlite table in the d1 database with their metadata stored in a special system collection named `_collections`. collections can be created, updated and deleted using the flarebase dashboard or the api. collections can have any number of fields with different types (string, number, boolean, date, file, etc.) and can have relations to other collections.
 
+Field configs can carry per-type validation options stored inside the fields JSON: `min`/`max` (length bounds for text/email/url/date, value bounds for number), `values` (allowed values for select) and `collectionId` (relation target). the record routes compile these into runtime request validation schemas (`src/lib/record-schema.ts`) at request time, so the stored metadata is the single source of truth for what a valid record body is.
+
 Some collections are system collections and can not be deleted or modified. these includes:
 - `_collections`: stores the metadata of all collections.
 - `_superusers`: stores the superuser accounts.

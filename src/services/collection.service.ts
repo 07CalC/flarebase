@@ -16,6 +16,11 @@ export interface Field {
   type: string;
   required?: boolean;
   unique?: boolean;
+  hidden?: boolean;
+  min?: number;
+  max?: number;
+  values?: string[];
+  collectionId?: string;
   [key: string]: any;
 }
 

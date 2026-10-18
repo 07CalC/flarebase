@@ -25,6 +25,80 @@ const nameSchema = z
   .max(64, "Name must be at most 64 characters")
   .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Invalid name");
 
+const STRING_FIELD_TYPES = new Set<FieldType>(["text", "email", "url", "date"]);
+
+function refineFieldConstraints(
+  field: { type: string; min?: number; max?: number; values?: string[]; collectionId?: string },
+  ctx: z.RefinementCtx,
+) {
+  // per-type constraint support:
+  // - string-ish types (text/email/url/date) accept min/max as length bounds
+  // - number accepts min/max as value bounds
+  // - select requires a values list
+  // - relation requires the target collection id
+  // - the remaining types accept none of the above
+  if (STRING_FIELD_TYPES.has(field.type as FieldType)) {
+    if (field.min !== undefined && (!Number.isInteger(field.min) || field.min < 0)) {
+      ctx.addIssue({ code: "custom", message: "min must be a non-negative integer", path: ["min"] });
+    }
+    if (field.max !== undefined && (!Number.isInteger(field.max) || field.max < 1)) {
+      ctx.addIssue({ code: "custom", message: "max must be a positive integer", path: ["max"] });
+    }
+    if (
+      typeof field.min === "number" &&
+      typeof field.max === "number" &&
+      field.min > field.max
+    ) {
+      ctx.addIssue({ code: "custom", message: "min must not be greater than max", path: ["min"] });
+    }
+    return;
+  }
+
+  if (field.type === "number") {
+    if (field.min !== undefined && !Number.isFinite(field.min)) {
+      ctx.addIssue({ code: "custom", message: "min must be a finite number", path: ["min"] });
+    }
+    if (field.max !== undefined && !Number.isFinite(field.max)) {
+      ctx.addIssue({ code: "custom", message: "max must be a finite number", path: ["max"] });
+    }
+    if (
+      typeof field.min === "number" &&
+      typeof field.max === "number" &&
+      field.min > field.max
+    ) {
+      ctx.addIssue({ code: "custom", message: "min must not be greater than max", path: ["min"] });
+    }
+    return;
+  }
+
+  if (field.type === "select") {
+    if (!field.values || field.values.length === 0) {
+      ctx.addIssue({ code: "custom", message: "Select fields require a values list", path: ["values"] });
+    } else if (new Set(field.values).size !== field.values.length) {
+      ctx.addIssue({ code: "custom", message: "Select values must be unique", path: ["values"] });
+    }
+    return;
+  }
+
+  if (field.type === "relation") {
+    if (typeof field.collectionId !== "string" || field.collectionId.length === 0) {
+      ctx.addIssue({ code: "custom", message: "Relation fields require the target collection id", path: ["collectionId"] });
+    }
+    return;
+  }
+
+  // bool, json, file: no constraints supported
+  for (const unsupported of ["min", "max", "values", "collectionId"] as const) {
+    if (field[unsupported] !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Constraint "${unsupported}" is not supported for ${field.type} fields`,
+        path: [unsupported],
+      });
+    }
+  }
+}
+
 export const collectionFieldSchema = z
   .object({
     name: nameSchema,
@@ -33,8 +107,15 @@ export const collectionFieldSchema = z
     unique: z.boolean().optional(),
     hidden: z.boolean().optional(),
     default: z.unknown().optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    values: z.array(z.string().min(1)).optional(),
+    collectionId: z.string().optional(),
   })
-  .catchall(z.unknown());
+  .strict()
+  .superRefine((field, ctx) => {
+    refineFieldConstraints(field, ctx);
+  });
 
 export type CollectionFieldInput = z.infer<typeof collectionFieldSchema>;
 

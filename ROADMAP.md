@@ -77,18 +77,22 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
   - issued token works with `authMiddleware` end-to-end (context populated)
   - tests at `tests/auth.test.ts` mirroring the auth-test style of `collection.test.ts`
 
-### 2.2 [ ] Records CRUD
+### 2.2 [~] Records CRUD
 
 - **Goal:** full records API per collection — the surface the dashboard and end users consume.
+- **Done (foundation, landed early):**
+  - `src/lib/record-schema.ts`: runtime request schema creator — builds create/update zod schemas from the field metadata stored in `_collections` (per-type constraints: min/max length on text/email/url/date, min/max value on number, `values` enum for select, relation id string; hidden fields excluded; required-with-default fields optional on create; empty patches rejected)
+  - field metadata schema (`src/lib/collection.ts`) validates the constraint options per type at collection save time (strict object, no unknown keys)
+  - `migrations/001_init.sql` (edited in place, pre-launch): `_superusers` seed metadata now carries `password` min 8 / max 128 and `email` max 254 — collection-level `options.minPasswordLength` removed; superusers create route reads constraints from metadata
 - **Scope:**
   - Replace the `records.route.ts` stub: `GET /` (list), `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id`
   - Pagination (page/perPage or cursor — pick one, document), sorting, filtering (initially simple `field=value` params; the full rule language arrives in Phase 3)
   - Hidden fields excluded from all responses (`getNonHiddenCollectionField` already exists)
-  - Per-type field validation on write: `text`, `number`, `bool`, `email`, `url`, `date`, `json`, `select` (respect options), `relation` (referenced record must exist), `file` (reject until Phase 5)
+  - Per-type field validation on write: wire `buildRecordCreateSchema`/`buildRecordUpdateSchema` (done, see foundation) plus `relation` existence checks; `file` (reject until Phase 5)
   - Required/unique enforcement errors mapped to correct codes (reuse `mapD1Error` for constraint failures)
   - Auth collections: password write goes through `hashPassword`, `verifyPassword` never leaks; `password` never returned
   - Guard rails: records API rejects `view` collections for writes (Phase 4 relaxes reads), rejects system collections per rules
-- **Files:** `src/routes/records.route.ts`, `src/services/records.service.ts`, new `src/lib/field-validation.ts`, `tests/records.test.ts`
+- **Files:** `src/routes/records.route.ts`, `src/services/records.service.ts`, `src/lib/record-schema.ts` (done), `tests/records.test.ts`
 - **Depends on:** 2.1 (auth for context), 1.2 (middleware)
 - **Acceptance:**
   - CRUD roundtrip for a base collection, including validation failures with `VALIDATION_ERROR`/`CONFLICT` codes

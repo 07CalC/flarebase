@@ -113,7 +113,7 @@ describe("POST /api/collections/_superusers/records", () => {
       expect(res.body.error).toContain("email");
     });
 
-    it("rejects a too-short password (default min 8)", async () => {
+    it("rejects a too-short password (seeded field metadata min 8)", async () => {
       const res = await superApi(ctx, "POST", START_URL, {
         body: { email: "x@flarebase.dev", password: "short" },
       });
@@ -122,22 +122,26 @@ describe("POST /api/collections/_superusers/records", () => {
       expect(res.body.error).toContain("at least 8");
     });
 
-    it("honors options.minPasswordLength on the _superusers collection", async () => {
-      const patched = await superApi(ctx, "PATCH", "/api/collections/_superusers", {
-        body: { options: { minPasswordLength: 12 } },
-      });
-      expect(patched.status).toBe(200);
-
+    it("honors the password max constraint from field metadata", async () => {
       const res = await superApi(ctx, "POST", START_URL, {
-        body: { email: "x@flarebase.dev", password: "8_charsyy" }, // 9 < 12
+        body: { email: "x@flarebase.dev", password: "p".repeat(129) },
       });
       expect(res.status).toBe(400);
-      expect(res.body.error).toContain("at least 12");
+      expect(res.body.code).toBe("VALIDATION_ERROR");
+      expect(res.body.error).toContain("at most 128");
+    });
 
-      const ok = await superApi(ctx, "POST", START_URL, {
-        body: { email: "y@flarebase.dev", password: "twelve_chars_x" },
+    it("system _superusers field metadata cannot be changed", async () => {
+      const res = await superApi(ctx, "PATCH", "/api/collections/_superusers", {
+        body: {
+          fields: [
+            { name: "email", type: "email", required: true, unique: true, max: 254 },
+            { name: "password", type: "text", required: true, min: 4 },
+          ],
+        },
       });
-      expect(ok.status).toBe(201);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("System collection fields cannot be modified");
     });
 
     it("ignores extra request keys", async () => {
