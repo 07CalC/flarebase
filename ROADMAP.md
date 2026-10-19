@@ -172,17 +172,22 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
 
 ## Phase 4 — Collections features
 
-### 4.1 [ ] View collections
+### 4.1 [x] View collections
 
 - **Goal:** SQLite views as virtual collections, queryable like normal collections.
-- **Scope:**
-  - Add `view` to `COLLECTION_TYPES` (schema, UI messages, tests that currently expect `type: view → 400`)
-  - `options.query` (single SELECT statement, validated: single statement, no leading underscores, no pragma/explain, read-only shape)
-  - Lifecycle: `CREATE VIEW` on create, `DROP VIEW`+`CREATE VIEW` on query/field changes, `DROP VIEW` on delete; column resolution used to generate the view's `fields` metadata
-  - Write guard: records API rejects writes on views; reads respect `viewRule`
-- **Files:** `src/lib/collection.ts`, `src/services/collection.service.ts`, `src/routes/records.route.ts`, `tests/collection.test.ts` (type view expectations)
+- **Done:**
+  - `view` is a first-class `COLLECTION_TYPES` member; create requires `options.query` and rejects client-supplied `fields`/`indexes`
+  - query validation in `src/lib/view-query.ts`: must start with `SELECT`/`WITH` (leading comments allowed), exactly one statement (one trailing `;` allowed), no identifiers starting with `_`/`sqlite_` (system tables) and no `password` — a view can never surface a stored hash, on top of SQLite only accepting select bodies
+  - lifecycle: `CREATE VIEW` before the metadata row (so fields resolve from the real query), `DROP VIEW`+`CREATE VIEW` on query/name change (with restore-on-failure so a rejected patch keeps the old view serving), `DROP VIEW` on delete; `PRAGMA table_info` resolves column names/types (`BOOL*`→bool, `INT/REAL/...`→number, else text) and duplicate/invalid names are rejected; the query must expose `id` (records stay addressable) and `createdAt` is only implicit when selected
+  - records reads work through the normal path: list/get respect `listRule`/`viewRule` (view rules compile against resolved columns only — `implicitFields: false` in the compiler — so dead columns cannot be referenced), filters/sorts accept exactly the resolved fields, default sort falls back to `id ASC` without `createdAt`; writes stay rejected with "View collections are read-only"
+  - `deleteCollectionById` drops a view with `DROP VIEW`; test reset drops leftover views too
+  - tests at `tests/views.test.ts` (join over two collections, rule matrix, invalid queries, rebuild-on-patch, rename/delete)
+- **Files:** `src/lib/view-query.ts`, `src/lib/collection.ts`, `src/services/collection.service.ts`, `src/api-rules/compiler.ts`, `src/lib/sql-query.ts`, `src/routes/records.route.ts`, `tests/views.test.ts`
 - **Depends on:** 2.2 (records), 3.4 (viewRule enforcement native rules path)
-- **Acceptance:** create a view over two collections → list/get works with rule enforcement; invalid query → 400; rename/delete cleans up the view.
+- **Acceptance:**
+  - create a view over two collections → list/get works with rule enforcement ✅
+  - invalid query → 400 (non-SELECT, multi-statement, reserved identifier, `password`, missing `id`, bad column name, broken SQL) ✅
+  - rename/delete cleans up the view (`sqlite_master` has no leftovers) ✅
 
 ### 4.2 [ ] Superuser management via records API
 

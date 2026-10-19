@@ -53,6 +53,26 @@ The list endpoint supports:
 
 The list response `data` is `{ page, perPage, totalItems, totalPages, items }`. Write requests are validated against the field metadata stored in `_collections` (per-type constraints, `values`, relation targets), dates are normalized to RFC 3339 UTC with milliseconds, and hidden fields are never part of a response.
 
+## view collections
+
+A collection created with `"type": "view"` is backed by a SQLite view instead of a table. The create payload carries the single-statement query in `options.query` and the `fields` are resolved from the query columns automatically, so `fields`/`indexes` are rejected both on create and on later patches:
+
+```jsonc
+{
+  "name": "post_overview",
+  "type": "view",
+  "options": {
+    "query": "SELECT p.id AS id, p.title AS title, u.email AS authorEmail FROM posts p LEFT JOIN users u ON u.id = p.author"
+  },
+  "listRule": "views > 10",
+  "viewRule": ""
+}
+```
+
+View queries must be one `SELECT`/`WITH` statement and must expose an `id` column; identifiers starting with `_` or `sqlite_` and any `password` reference are rejected so a view can never surface system tables or stored hashes. Views are read-only through the records API (writes return `400`); reads use the same rules, filters and pagination as normal collections — but only the resolved columns exist, with `-createdAt,id` as the default sort only when `createdAt` was selected (`id` alone otherwise). Field types are inferred from the query's declared column types (`BOOL*` → bool, numeric → number, everything else → text), so view rules have no date-class field and `@now` comparisons are unavailable there. Changing `options.query` (or the name) rebuilds the view and re-resolves its fields; a patch that would leave a stored rule referencing a removed column is rejected and the previous view keeps serving. Deleting the collection drops the view.
+
+Note that dropping a base collection does not cascade to views that select from it (SQLite allows the drop and the view errors on its next read until its query is patched or it is deleted).
+
 ## development notes
 
 Tests run inside the real Workers runtime (workerd) via `@cloudflare/vitest-plugin`:

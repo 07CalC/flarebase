@@ -463,17 +463,25 @@ describe("records rules: locked (null) vs open (empty)", () => {
   });
 
   it("rejects writes on view collections but keeps reads available", async () => {
-    const posts = await makePosts();
-    await ctx.db
-      .prepare(`UPDATE _collections SET type = 'view' WHERE id = ?1`)
-      .bind(posts.id)
-      .run();
+    await makePosts();
+    await createCollection(ctx.db, {
+      name: "post_previews",
+      type: "view",
+      options: { query: "SELECT id, title FROM posts" },
+      listRule: "",
+      viewRule: "",
+      createRule: "",
+      updateRule: "",
+      deleteRule: "",
+    });
 
-    const write = await createPost({ title: "nope" });
+    const write = await api(ctx, "POST", "/api/collections/post_previews/records", {
+      body: { title: "nope" },
+    });
     expect(write.status).toBe(400);
     expect(write.body.error).toContain("View collections are read-only");
 
-    const read = await listPosts();
+    const read = await api(ctx, "GET", "/api/collections/post_previews/records");
     expect(read.status).toBe(200);
   });
 });

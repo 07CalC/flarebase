@@ -134,7 +134,10 @@ trimming, no normalization); compilation works from the exact stored string.
 **Record fields** — bare identifiers:
 
 - Must exist in the collection's `fields` metadata (`id`, `createdAt`, `updatedAt` are
-  implicit and always allowed; `createdAt`/`updatedAt` are date-class).
+  implicit and always allowed on table-backed collections; `createdAt`/`updatedAt` are
+  date-class). View collections have no implicit columns: their rules compile against
+  the resolved query columns alone, a view must select `id`, and `createdAt`/
+  `updatedAt` only exist when selected.
 - `hidden: true` fields are allowed; hidden only affects API projection, and rules run
   server-side.
 - `json` and `file` fields are rejected in v1 (no defined comparison semantics yet).

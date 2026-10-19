@@ -1,8 +1,17 @@
 import { compileRuleSet, formatRuleErrors } from "../api-rules";
-import type { CompiledRuleSet, RuleField } from "../api-rules";
-import { assertValidCollectionName, quoteIdent } from "../lib/collection-name";
+import type {
+  CompiledRuleSet,
+  CompileRuleSetOptions,
+  RuleField,
+} from "../api-rules";
+import {
+  assertValidCollectionName,
+  isValidCollectionName,
+  quoteIdent,
+} from "../lib/collection-name";
 import { AppError, ResponseCode } from "../lib/response"; import { mapD1Error } from "../lib/d1-error";
 import { AUTH_REQUIRED_FIELDS } from "../lib/auth";
+import { validateViewQuery } from "../lib/view-query";
 import {
   assertIndexColumnsExist,
   buildColumnDef,
@@ -246,8 +255,12 @@ interface RuleTexts {
 
 // Rules are compiled at save time against the effective field metadata, so an
 // invalid rule (or a field change that breaks a stored rule) never persists.
-function compileRulesOrThrow(rules: RuleTexts, fields: RuleField[]): CompiledRuleSet {
-  const { compiled, errors } = compileRuleSet(rules, fields);
+function compileRulesOrThrow(
+  rules: RuleTexts,
+  fields: RuleField[],
+  options: CompileRuleSetOptions = {},
+): CompiledRuleSet {
+  const { compiled, errors } = compileRuleSet(rules, fields, options);
   if (errors.length > 0) {
     throw new AppError(
       formatRuleErrors(errors),
@@ -256,6 +269,22 @@ function compileRulesOrThrow(rules: RuleTexts, fields: RuleField[]): CompiledRul
     );
   }
   return compiled;
+}
+
+function effectiveRuleTexts(
+  existing: Collection,
+  input: UpdateCollectionInput,
+): RuleTexts {
+  return {
+    listRule: input.listRule !== undefined ? input.listRule : existing.listRule,
+    viewRule: input.viewRule !== undefined ? input.viewRule : existing.viewRule,
+    createRule:
+      input.createRule !== undefined ? input.createRule : existing.createRule,
+    updateRule:
+      input.updateRule !== undefined ? input.updateRule : existing.updateRule,
+    deleteRule:
+      input.deleteRule !== undefined ? input.deleteRule : existing.deleteRule,
+  };
 }
 
 function assertValidIndexes(
@@ -287,7 +316,15 @@ export async function createCollection(
   }
   const indexes = input.indexes ?? [];
   const type = input.type ?? "base";
-  assertValidIndexes(indexes, input.fields);
+  const fields = input.fields ?? [];
+
+  if (type === "view") {
+    return createViewCollection(db, input, indexes);
+  }
+  if (fields.length === 0) {
+    throw new AppError("fields is required", 400, ResponseCode.VALIDATION_ERROR);
+  }
+  assertValidIndexes(indexes, fields);
 
   const compiledRules = compileRulesOrThrow(
     {
@@ -297,17 +334,17 @@ export async function createCollection(
       updateRule: input.updateRule,
       deleteRule: input.deleteRule,
     },
-    input.fields,
+    fields,
   );
 
   const id = generateCollectionId();
-  const fieldsJson = JSON.stringify(input.fields);
+  const fieldsJson = JSON.stringify(fields);
   const indexesJson = JSON.stringify(indexes);
   const optionsJson = JSON.stringify(input.options ?? {});
 
   const columnDefs = [
     `"id" TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(5))))`,
-    ...input.fields.map((f) => buildColumnDef(f, false)),
+    ...fields.map((f) => buildColumnDef(f, false)),
     `"createdAt" TIMESTAMP NOT NULL DEFAULT ${SQL_NOW}`,
     `"updatedAt" TIMESTAMP NOT NULL DEFAULT ${SQL_NOW}`,
   ];
@@ -352,6 +389,284 @@ export async function createCollection(
   return created;
 }
 
+// ---------------------------------------------------------------------------
+// view collections: a stored SELECT statement backing a virtual collection.
+// Fields are never client-supplied; they are resolved from the real query
+// result (PRAGMA table_info) right after the view is created.
+
+function viewQueryError(err: unknown): AppError {
+  const message = err instanceof Error ? err.message : String(err);
+  return new AppError(
+    `Invalid view query: ${message}`,
+    400,
+    ResponseCode.VALIDATION_ERROR,
+  );
+}
+
+async function dropViewIfExists(db: D1Database, name: string): Promise<void> {
+  try {
+    await db.prepare(`DROP VIEW IF EXISTS ${quoteIdent(name)}`).run();
+  } catch {
+    // best-effort cleanup: the original failure is what surfaces
+  }
+}
+
+// Restores the pre-update view after a failed rebuild (does nothing when the
+// stored query itself is missing/corrupt). Best effort: the metadata row is
+// still authoritative and a later successful update recreates the view.
+async function restoreView(
+  db: D1Database,
+  existing: Collection,
+  currentName: string,
+): Promise<void> {
+  const oldQuery = existing.options?.query;
+  if (typeof oldQuery !== "string" || oldQuery.trim() === "") return;
+  await dropViewIfExists(db, currentName);
+  try {
+    await db
+      .prepare(`CREATE VIEW ${quoteIdent(existing.name)} AS ${oldQuery}`)
+      .run();
+  } catch {
+    // ignored, see above
+  }
+}
+
+function inferredFieldType(declaredType: string): string {
+  const type = declaredType.toUpperCase();
+  if (type.includes("BOOL")) return "bool";
+  if (/INT|REAL|FLOA|DOUB|DEC|NUM/.test(type)) return "number";
+  return "text";
+}
+
+// View fields are exactly the columns the query selects; `id` is required so
+// records stay addressable (GET /:id, sort tiebreak, relation checks).
+async function resolveViewFields(
+  db: D1Database,
+  name: string,
+): Promise<Field[]> {
+  const { results } = await db
+    .prepare(`PRAGMA table_info(${quoteIdent(name)})`)
+    .all<{ name: string; type: string | null }>();
+  const columns = results ?? [];
+  if (!columns.some((column) => column.name === "id")) {
+    throw new AppError(
+      'View queries must expose an "id" column',
+      400,
+      ResponseCode.VALIDATION_ERROR,
+    );
+  }
+  const seen = new Set<string>();
+  return columns.map((column) => {
+    if (!isValidCollectionName(column.name)) {
+      throw new AppError(
+        `View column "${column.name}" is not a valid field name; alias it to a valid identifier`,
+        400,
+        ResponseCode.VALIDATION_ERROR,
+      );
+    }
+    if (seen.has(column.name)) {
+      throw new AppError(
+        `View query produces duplicate column "${column.name}"`,
+        400,
+        ResponseCode.VALIDATION_ERROR,
+      );
+    }
+    seen.add(column.name);
+    return { name: column.name, type: inferredFieldType(column.type ?? "") };
+  });
+}
+
+async function createViewCollection(
+  db: D1Database,
+  input: CreateCollectionInput,
+  indexes: CollectionIndexInput[],
+): Promise<Collection> {
+  if (input.fields !== undefined && input.fields.length > 0) {
+    throw new AppError(
+      "View collection fields are derived from options.query; omit fields",
+      400,
+      ResponseCode.VALIDATION_ERROR,
+    );
+  }
+  if (indexes.length > 0) {
+    throw new AppError(
+      "View collections do not support indexes",
+      400,
+      ResponseCode.VALIDATION_ERROR,
+    );
+  }
+  // the view must exist before its columns can be resolved from the query
+  const query = validateViewQuery(input.options?.query);
+  try {
+    await db.prepare(`CREATE VIEW ${quoteIdent(input.name)} AS ${query}`).run();
+  } catch (err) {
+    throw viewQueryError(err);
+  }
+
+  let fields: Field[];
+  let compiledRules: CompiledRuleSet;
+  try {
+    fields = await resolveViewFields(db, input.name);
+    compiledRules = compileRulesOrThrow(
+      {
+        listRule: input.listRule,
+        viewRule: input.viewRule,
+        createRule: input.createRule,
+        updateRule: input.updateRule,
+        deleteRule: input.deleteRule,
+      },
+      fields,
+      { implicitFields: false },
+    );
+  } catch (err) {
+    await dropViewIfExists(db, input.name);
+    throw err instanceof AppError ? err : viewQueryError(err);
+  }
+
+  const id = generateCollectionId();
+  try {
+    await runBatch(db, [
+      db
+        .prepare(
+          `INSERT INTO _collections (id, name, system, type, fields, indexes, listRule, viewRule, createRule, updateRule, deleteRule, options, compiledRules)
+           VALUES (?1, ?2, 0, 'view', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+        )
+        .bind(
+          id,
+          input.name,
+          JSON.stringify(fields),
+          JSON.stringify(indexes),
+          input.listRule ?? null,
+          input.viewRule ?? null,
+          input.createRule ?? null,
+          input.updateRule ?? null,
+          input.deleteRule ?? null,
+          JSON.stringify(input.options ?? {}),
+          JSON.stringify(compiledRules),
+        ),
+    ]);
+  } catch (err) {
+    await dropViewIfExists(db, input.name);
+    throw err;
+  }
+
+  const created = await getCollectionById(db, id);
+  if (!created) {
+    throw new AppError(
+      "Failed to create collection",
+      500,
+      ResponseCode.INTERNAL_SERVER_ERROR,
+    );
+  }
+  return created;
+}
+
+async function updateViewCollectionById(
+  db: D1Database,
+  existing: Collection,
+  input: UpdateCollectionInput,
+): Promise<Collection> {
+  if (input.fields !== undefined) {
+    throw new AppError(
+      "View collection fields are derived from options.query and cannot be modified",
+      400,
+      ResponseCode.VALIDATION_ERROR,
+    );
+  }
+  const nextIndexes = input.indexes ?? existing.indexes;
+  if (nextIndexes.length > 0) {
+    throw new AppError(
+      "View collections do not support indexes",
+      400,
+      ResponseCode.VALIDATION_ERROR,
+    );
+  }
+
+  let name = existing.name;
+  if (input.name !== undefined && input.name !== existing.name) {
+    assertValidCollectionName(input.name);
+    const duplicate = await getCollectionByName(db, input.name);
+    if (duplicate && duplicate.id !== existing.id) {
+      throw new AppError("Collection already exists", 409, ResponseCode.CONFLICT);
+    }
+    name = input.name;
+  }
+  const nameChanged = name !== existing.name;
+
+  const options = input.options !== undefined ? input.options : existing.options;
+  const queryChanged =
+    input.options !== undefined && options?.query !== existing.options?.query;
+
+  // Rebuild only when the query or the name changes; rule-only patches leave
+  // the SQLite view untouched.
+  let fields = existing.fields;
+  let rebuilt = false;
+  if (nameChanged || queryChanged) {
+    const query = validateViewQuery(options?.query);
+    try {
+      await db
+        .prepare(`DROP VIEW IF EXISTS ${quoteIdent(existing.name)}`)
+        .run();
+      await db.prepare(`CREATE VIEW ${quoteIdent(name)} AS ${query}`).run();
+      rebuilt = true;
+      fields = await resolveViewFields(db, name);
+    } catch (err) {
+      await restoreView(db, existing, name);
+      throw err instanceof AppError ? err : viewQueryError(err);
+    }
+  }
+
+  const effectiveRules = effectiveRuleTexts(existing, input);
+  let compiledRules: CompiledRuleSet;
+  try {
+    compiledRules = compileRulesOrThrow(effectiveRules, fields, {
+      implicitFields: false,
+    });
+  } catch (err) {
+    if (rebuilt) await restoreView(db, existing, name);
+    throw err;
+  }
+
+  try {
+    await runBatch(db, [
+      db
+        .prepare(
+          `UPDATE _collections
+           SET name = ?1, fields = ?2, indexes = ?3,
+               listRule = ?4, viewRule = ?5, createRule = ?6, updateRule = ?7, deleteRule = ?8,
+               options = ?9, compiledRules = ?10, updatedAt = ${SQL_NOW}
+           WHERE id = ?11`,
+        )
+        .bind(
+          name,
+          JSON.stringify(fields),
+          JSON.stringify(nextIndexes),
+          effectiveRules.listRule,
+          effectiveRules.viewRule,
+          effectiveRules.createRule,
+          effectiveRules.updateRule,
+          effectiveRules.deleteRule,
+          JSON.stringify(options ?? {}),
+          JSON.stringify(compiledRules),
+          existing.id,
+        ),
+    ]);
+  } catch (err) {
+    if (rebuilt) await restoreView(db, existing, name);
+    throw err;
+  }
+
+  const updated = await getCollectionById(db, existing.id);
+  if (!updated) {
+    throw new AppError(
+      "Failed to update collection",
+      500,
+      ResponseCode.INTERNAL_SERVER_ERROR,
+    );
+  }
+  return updated;
+}
+
 export async function updateCollectionById(
   db: D1Database,
   collectionId: string,
@@ -370,6 +685,10 @@ export async function updateCollectionById(
       400,
       ResponseCode.INVALID_REQUEST,
     );
+  }
+
+  if (existing.type === "view") {
+    return updateViewCollectionById(db, existing, input);
   }
 
   const statements: D1PreparedStatement[] = [];
@@ -452,16 +771,7 @@ export async function updateCollectionById(
 
   // Any field change recompiles all five rules against the effective metadata,
   // and a patch may fix broken rules in the same write.
-  const effectiveRules: RuleTexts = {
-    listRule: input.listRule !== undefined ? input.listRule : existing.listRule,
-    viewRule: input.viewRule !== undefined ? input.viewRule : existing.viewRule,
-    createRule:
-      input.createRule !== undefined ? input.createRule : existing.createRule,
-    updateRule:
-      input.updateRule !== undefined ? input.updateRule : existing.updateRule,
-    deleteRule:
-      input.deleteRule !== undefined ? input.deleteRule : existing.deleteRule,
-  };
+  const effectiveRules = effectiveRuleTexts(existing, input);
   const compiledRules = compileRulesOrThrow(effectiveRules, fields);
 
   const nextIndexes: Array<CollectionIndexInput | CollectionIndex> =
@@ -525,8 +835,12 @@ export async function deleteCollectionById(
       ResponseCode.INVALID_REQUEST,
     );
   }
+  const dropStatement =
+    existing.type === "view"
+      ? `DROP VIEW IF EXISTS ${quoteIdent(existing.name)}`
+      : `DROP TABLE IF EXISTS ${quoteIdent(existing.name)}`;
   await runBatch(db, [
-    db.prepare(`DROP TABLE IF EXISTS ${quoteIdent(existing.name)}`),
+    db.prepare(dropStatement),
     db.prepare(`DELETE FROM _sessions WHERE collectionId = ?1`).bind(existing.id),
     db.prepare(`DELETE FROM _collections WHERE id = ?1`).bind(existing.id),
   ]);

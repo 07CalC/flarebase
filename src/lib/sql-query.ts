@@ -3,9 +3,6 @@ import { quoteIdent } from "./collection-name";
 import { SQL_NOW } from "./collection";
 import { getNonHiddenCollectionField, type Collection } from "../services/collection.service";
 
-// A parameterized boolean fragment: `sql` uses bare `?` placeholders and
-// `values` binds them in textual order. Both compiled rule predicates and the
-// simple user filters share this shape (API_RULES.md §6.2).
 export interface SqlFilter {
   sql: string;
   values: unknown[];
@@ -16,11 +13,14 @@ export interface SortSpec {
   direction: "ASC" | "DESC";
 }
 
-// id/createdAt/updatedAt are implicit on every collection table
 const IMPLICIT_COLUMNS = ["id", "createdAt", "updatedAt"] as const;
 
+function implicitColumns(collection: Collection): readonly string[] {
+  return collection.type === "view" ? [] : IMPLICIT_COLUMNS;
+}
+
 function knownColumnNames(collection: Collection): Set<string> {
-  const names = new Set<string>(IMPLICIT_COLUMNS);
+  const names = new Set<string>(implicitColumns(collection));
   for (const field of collection.fields) names.add(field.name);
   return names;
 }
@@ -68,12 +68,16 @@ function whereClause(clauses: SqlFilter[]): {
   };
 }
 
-// non-hidden projection; the implicit id/createdAt/updatedAt columns are
-// always part of a record (rules treat them as always allowed)
+// non-hidden projection; for tables the implicit id/createdAt/updatedAt
+// columns are always part of a record (rules treat them as always allowed)
 function visibleColumns(collection: Collection): string {
-  const names = new Set<string>(IMPLICIT_COLUMNS);
+  const names = new Set<string>(implicitColumns(collection));
   for (const field of getNonHiddenCollectionField(collection)) {
     names.add(field.name);
+  }
+  if (names.size === 0) {
+    // defensive: view queries must expose `id`, but never emit an empty list
+    names.add("id");
   }
   return [...names].map(quoteIdent).join(", ");
 }
@@ -179,6 +183,18 @@ const DEFAULT_SORT: SortSpec[] = [
   { column: "id", direction: "ASC" },
 ];
 
+// views lack the implicit timestamp columns unless the query selects them
+function defaultSortFor(collection: Collection): SortSpec[] {
+  if (collection.type !== "view") return DEFAULT_SORT;
+  const names = new Set(collection.fields.map((field) => field.name));
+  const sort: SortSpec[] = [];
+  if (names.has("createdAt")) {
+    sort.push({ column: "createdAt", direction: "DESC" });
+  }
+  sort.push({ column: "id", direction: "ASC" });
+  return sort;
+}
+
 export function buildListRecordsQuery(
   collection: Collection,
   options: ListRecordsOptions,
@@ -188,7 +204,10 @@ export function buildListRecordsQuery(
   for (const condition of options.conditions ?? []) clauses.push(condition);
   const { where, values } = whereClause(clauses);
 
-  const sort = options.sort && options.sort.length > 0 ? options.sort : DEFAULT_SORT;
+  const sort =
+    options.sort && options.sort.length > 0
+      ? options.sort
+      : defaultSortFor(collection);
   const orderBy = sort
     .map((spec) => {
       assertKnownColumn(collection, spec.column);

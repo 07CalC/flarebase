@@ -46,16 +46,18 @@ const PROTECTED_TABLES = new Set([
 // same migrated + seeded baseline: drop whatever the previous tests left
 // behind, clear system rows, and restore seed metadata.
 async function resetDatabase(db: D1Database): Promise<void> {
+  // user tables and views are dropped; a view must be dropped with DROP VIEW
   const { results } = await db
-    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`)
-    .all<{ name: string }>();
-  for (const { name } of results) {
+    .prepare(`SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view')`)
+    .all<{ name: string; type: string }>();
+  for (const { name, type } of results) {
     if (PROTECTED_TABLES.has(name)) continue;
     // D1-internal tables (_cf_*) and sqlite internals cannot be dropped (the
     // authorizer rejects it with SQLITE_AUTH) and must not be
     if (name.startsWith("_cf_") || name.startsWith("sqlite_")) continue;
     // names come from sqlite_master itself, never from request input
-    await db.prepare(`DROP TABLE IF EXISTS "${name}"`).run();
+    const dropType = type === "view" ? "VIEW" : "TABLE";
+    await db.prepare(`DROP ${dropType} IF EXISTS "${name}"`).run();
   }
 
   await db.prepare(`DELETE FROM _collections WHERE system = 0`).run();
@@ -198,6 +200,13 @@ export const superApi = (
 export async function tableNames(db: D1Database): Promise<string[]> {
   const { results } = await db
     .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
+    .all<{ name: string }>();
+  return results.map((r) => r.name);
+}
+
+export async function viewNames(db: D1Database): Promise<string[]> {
+  const { results } = await db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'view' ORDER BY name`)
     .all<{ name: string }>();
   return results.map((r) => r.name);
 }

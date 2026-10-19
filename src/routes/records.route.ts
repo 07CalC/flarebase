@@ -55,9 +55,10 @@ function recordCollection(c: Context<HonoApp>): CompiledCollection {
   return collection;
 }
 
-// view collections are read-only until Phase 4; the _collections metadata
-// table can never be written through the records API because edits there would
-// bypass rule compilation (metadata is managed via /api/collections only)
+// view collections are read-only; their writes are rejected here, reads go
+// through the normal rules path. The _collections metadata table can never be
+// written through the records API because edits there would bypass rule
+// compilation (metadata is managed via /api/collections only)
 function assertWritable(collection: CompiledCollection): void {
   if (collection.type === "view") {
     throw new AppError(
@@ -112,13 +113,15 @@ interface RecordColumn {
   type: string;
 }
 
-// metadata fields plus the implicit id/createdAt/updatedAt columns
+// metadata fields plus the implicit id/createdAt/updatedAt columns; a view
+// collection only has the columns its resolved metadata lists
 function findRecordColumn(
   collection: CompiledCollection,
   name: string,
 ): RecordColumn | null {
   const field = collection.fields.find((f) => f.name === name);
   if (field) return { name: field.name, type: field.type };
+  if (collection.type === "view") return null;
   if (name === "id") return { name: "id", type: "text" };
   if (name === "createdAt" || name === "updatedAt") {
     return { name, type: "date" };

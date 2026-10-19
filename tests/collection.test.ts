@@ -395,13 +395,15 @@ describe("POST /api/collections", () => {
     expect(cols).toContain("password");
   });
 
-  it("type view or unknown -> 400", async () => {
-    for (const type of ["view", "bogus"]) {
-      const res = await superApi(ctx, "POST", "/api/collections", {
-        body: { name: "x", type, fields: [{ name: "a", type: "text" }] },
-      });
-      expect(res.status).toBe(400);
-    }
+  it("unknown collection type -> 400", async () => {
+    const res = await superApi(ctx, "POST", "/api/collections", {
+      body: {
+        name: "x",
+        type: "bogus",
+        fields: [{ name: "a", type: "text" }],
+      },
+    });
+    expect(res.status).toBe(400);
   });
 
   it("malformed JSON body -> 400 INVALID_REQUEST", async () => {

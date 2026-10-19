@@ -2,7 +2,7 @@ import { z } from "zod";
 import { AUTH_REQUIRED_FIELDS } from "./auth";
 import { isValidCollectionName, quoteIdent } from "./collection-name";
 
-export const COLLECTION_TYPES = ["base", "auth"] as const;
+export const COLLECTION_TYPES = ["base", "auth", "view"] as const;
 export type CollectionType = (typeof COLLECTION_TYPES)[number];
 
 export const FIELD_TYPES = [
@@ -180,11 +180,44 @@ function refineAuthFields(
   }
 }
 
+function refineViewCollection(
+  val: {
+    fields?: unknown[];
+    indexes?: unknown[];
+    options?: Record<string, unknown>;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (val.fields !== undefined && val.fields.length > 0) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "View collection fields are derived from options.query; omit fields",
+      path: ["fields"],
+    });
+  }
+  if (val.indexes !== undefined && val.indexes.length > 0) {
+    ctx.addIssue({
+      code: "custom",
+      message: "View collections do not support indexes",
+      path: ["indexes"],
+    });
+  }
+  const query = val.options?.query;
+  if (typeof query !== "string" || query.trim() === "") {
+    ctx.addIssue({
+      code: "custom",
+      message: 'View collections require an "options.query" SELECT statement',
+      path: ["options", "query"],
+    });
+  }
+}
+
 export const createCollectionSchema = z
   .object({
     name: nameSchema,
     type: z.enum(COLLECTION_TYPES).optional().default("base"),
-    fields: z.array(collectionFieldSchema).min(1).max(100),
+    fields: z.array(collectionFieldSchema).max(100).optional(),
     indexes: z.array(collectionIndexSchema).max(50).optional().default([]),
     listRule: ruleSchema,
     viewRule: ruleSchema,
@@ -195,8 +228,20 @@ export const createCollectionSchema = z
   })
   .superRefine((val, ctx) => {
     refineNoReservedPrefix(val.name, ctx, ["name"]);
-    refineUniqueFieldNames(val.fields, ctx);
-    refineAuthFields(val.type, val.fields, ctx);
+    refineUniqueFieldNames(val.fields ?? [], ctx);
+    if (val.type === "view") {
+      refineViewCollection(val, ctx);
+      return;
+    }
+    if (val.fields === undefined || val.fields.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: "fields is required",
+        path: ["fields"],
+      });
+    } else {
+      refineAuthFields(val.type, val.fields, ctx);
+    }
   });
 
 export type CreateCollectionInput = z.input<typeof createCollectionSchema>;

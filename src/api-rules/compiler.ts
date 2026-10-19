@@ -18,8 +18,6 @@ import {
   type ValueExpr,
 } from "./types";
 
-// id/createdAt/updatedAt are implicit on every collection table; createdAt and
-// updatedAt are date-class so they compare with @now.
 const IMPLICIT_FIELDS: Record<string, string> = {
   id: "text",
   createdAt: "date",
@@ -68,6 +66,8 @@ interface CompileState {
   action: RuleAction;
   fields: Map<string, RuleField>;
   slots: CompiledRuleSlot[];
+  /** implicit id/createdAt/updatedAt columns are addressable */
+  implicitFields: boolean;
 }
 
 function kindsForType(type: string): Set<KindClass> {
@@ -90,10 +90,13 @@ function kindsForType(type: string): Set<KindClass> {
   }
 }
 
-function resolveFieldType(fields: Map<string, RuleField>, name: string): string | null {
-  const field = fields.get(name);
+function resolveFieldType(
+  state: CompileState,
+  name: string,
+): string | null {
+  const field = state.fields.get(name);
   if (field) return field.type;
-  return IMPLICIT_FIELDS[name] ?? null;
+  return state.implicitFields ? (IMPLICIT_FIELDS[name] ?? null) : null;
 }
 
 function assertUsableFieldType(type: string, name: string, node: NodeBase): void {
@@ -334,7 +337,7 @@ function compileValue(
 
     case "field": {
       assertNotPassword(node.name, node);
-      const type = resolveFieldType(state.fields, node.name);
+      const type = resolveFieldType(state, node.name);
       if (type === null) {
         throw new RuleError(
           `unknown field "${node.name}"`,
@@ -480,6 +483,7 @@ export function compileRule(
     action,
     fields: fieldMapOf(fields),
     slots: [],
+    implicitFields: true,
   };
   const sql = compileExpr(ast, state);
   return { sql, slots: state.slots };
@@ -490,6 +494,10 @@ export interface CompileRuleSetResult {
   errors: RuleCompileError[];
 }
 
+export interface CompileRuleSetOptions {
+  implicitFields?: boolean;
+}
+
 /**
  * Compiles all five rules in one pass, collecting every violation instead of
  * throwing at the first one. `null`/absent rules stay locked (no artifact
@@ -498,8 +506,10 @@ export interface CompileRuleSetResult {
 export function compileRuleSet(
   rules: Partial<Record<RuleKey, string | null | undefined>>,
   fields: RuleField[],
+  options: CompileRuleSetOptions = {},
 ): CompileRuleSetResult {
   const fieldMap = fieldMapOf(fields);
+  const implicitFields = options.implicitFields !== false;
   const compiled: CompiledRuleSet = {};
   const errors: RuleCompileError[] = [];
 
@@ -525,6 +535,7 @@ export function compileRuleSet(
         action: ACTION_BY_RULE[key],
         fields: fieldMap,
         slots: [],
+        implicitFields,
       };
       compiled[key] = { sql: compileExpr(ast, state), slots: state.slots };
     } catch (err) {

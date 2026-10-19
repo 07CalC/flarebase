@@ -6,6 +6,7 @@ export {
   compileRule,
   compileRuleSet,
   resolveRule,
+  type CompileRuleSetOptions,
   type CompileRuleSetResult,
   type RuleContext,
 } from "./compiler";
