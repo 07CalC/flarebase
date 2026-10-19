@@ -1,23 +1,9 @@
 import { z } from "zod";
 import type { Field } from "../services/collection.service";
 
-// Runtime request validation is generated from the field metadata stored in
-// _collections: per-field type, required flag and constraint options (min,
-// max, select values, relation target) turn into a zod schema for POST
-// (create) and PATCH (update) record requests.
-//
-// - hidden fields are never client-settable and are excluded
-// - fields configured with a default are optional at create time even when
-//   marked required, because the column default covers them
-// - unknown keys are stripped (zod default), the records service has the
-//   final unknown-field guard (`assertInsertFields` in lib/sql-query.ts)
 
 const REQUIRED_ERROR = "This field is required";
 
-// length constraints via standalone check factories: z.email()/z.url() are
-// dedicated format schemas in zod v4 and cannot be retyped to ZodString.
-// $ZodCheck is contravariant in T (default `never`), so the factory results
-// need an explicit cast to the schema-agnostic check type.
 type SchemaCheck = z.core.$ZodCheck<unknown>;
 
 function lengthConstraints(base: z.ZodType, field: Field): z.ZodType {

@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS _migrations (
   id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
-  applied TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  applied TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
 CREATE TABLE IF NOT EXISTS _collections (
@@ -19,8 +19,8 @@ CREATE TABLE IF NOT EXISTS _collections (
   compiledRules JSON NOT NULL DEFAULT '{}',
 
   options JSON DEFAULT '{}' NOT NULL,
-  createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  createdAt TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updatedAt TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_collections_name ON _collections(name);
@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS _superusers (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(5)))),
   email TEXT NOT NULL UNIQUE,
   password TEXT NOT NULL,
-  createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  createdAt TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updatedAt TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_superusers_email ON _superusers(email);

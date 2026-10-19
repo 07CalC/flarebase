@@ -7,8 +7,8 @@ CREATE TABLE IF NOT EXISTS _sessions (
   revoked INTEGER NOT NULL DEFAULT 0,
   ip TEXT,
   userAgent TEXT,
-  createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  createdAt TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updatedAt TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_jti ON _sessions(jti);

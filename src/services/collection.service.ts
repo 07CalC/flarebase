@@ -7,6 +7,7 @@ import {
   assertIndexColumnsExist,
   buildColumnDef,
   buildCreateIndexStatement,
+  SQL_NOW,
   type CollectionFieldInput,
   type CollectionIndexInput,
   type CreateCollectionInput,
@@ -307,8 +308,8 @@ export async function createCollection(
   const columnDefs = [
     `"id" TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(5))))`,
     ...input.fields.map((f) => buildColumnDef(f, false)),
-    `"createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`,
-    `"updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`,
+    `"createdAt" TIMESTAMP NOT NULL DEFAULT ${SQL_NOW}`,
+    `"updatedAt" TIMESTAMP NOT NULL DEFAULT ${SQL_NOW}`,
   ];
 
   const statements: D1PreparedStatement[] = [
@@ -479,7 +480,7 @@ export async function updateCollectionById(
         `UPDATE _collections
          SET name = ?1, fields = ?2, indexes = ?3,
              listRule = ?4, viewRule = ?5, createRule = ?6, updateRule = ?7, deleteRule = ?8,
-             options = ?9, compiledRules = ?10, updatedAt = CURRENT_TIMESTAMP
+             options = ?9, compiledRules = ?10, updatedAt = ${SQL_NOW}
          WHERE id = ?11`,
       )
       .bind(

@@ -38,6 +38,21 @@ npm run deploy
 
 Session TTL can be overridden per deployment by setting `SESSION_TTL_SECONDS` under `vars` in `wrangler.jsonc` or with `npx wrangler secret put` if you want it out of source.
 
+## records api
+
+Records live under `/api/collections/{collection}/records`: `GET /` lists, `GET /{id}` reads, `POST /` creates, `PATCH /{id}` updates and `DELETE /{id}` deletes. Every action is guarded by the collection's API rule (`listRule`, `viewRule`, `createRule`, `updateRule`, `deleteRule`): `null` means superusers only, `""` is open to everyone, and expressions are evaluated server-side per [API_RULES.md](./API_RULES.md) (superusers bypass all rules).
+
+The list endpoint supports:
+
+| query param | default | description |
+| --- | --- | --- |
+| `page` | `1` | 1-based page number |
+| `perPage` | `30` | items per page, maximum `500` |
+| `sort` | `-createdAt,id` | comma-separated field list; a `-` prefix sorts descending |
+| `{field}` | — | exact-match filter, one query param per field; numbers, booleans and dates are coerced/normalized like writes |
+
+The list response `data` is `{ page, perPage, totalItems, totalPages, items }`. Write requests are validated against the field metadata stored in `_collections` (per-type constraints, `values`, relation targets), dates are normalized to RFC 3339 UTC with milliseconds, and hidden fields are never part of a response.
+
 ## development notes
 
 Tests run inside the real Workers runtime (workerd) via `@cloudflare/vitest-plugin`:

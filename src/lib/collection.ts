@@ -258,6 +258,12 @@ function zeroDefaultForType(type: FieldType): string | number {
   }
 }
 
+// SQL expression producing the canonical timestamp format every date-class
+// column stores: RFC 3339 UTC with millisecond precision
+// (`2026-10-18T12:34:56.789Z`). Rules compare dates lexicographically, so
+// column defaults, app writes and @now must all use this same representation.
+export const SQL_NOW = "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))";
+
 export function formatDefaultLiteral(value: unknown): string {
   if (value === null) return "NULL";
   if (typeof value === "number") {

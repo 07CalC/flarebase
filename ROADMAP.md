@@ -83,28 +83,23 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
   - issued token works with `authMiddleware` end-to-end (context populated) ✅
   - tests at `tests/auth.test.ts` mirroring the auth-test style of `collection.test.ts` ✅
 
-### 2.2 [~] Records CRUD
+### 2.2 [x] Records CRUD
 
 - **Goal:** full records API per collection — the surface the dashboard and end users consume.
-- **Done (foundation, landed early):**
-  - `src/lib/record-schema.ts`: runtime request schema creator — builds create/update zod schemas from the field metadata stored in `_collections` (per-type constraints: min/max length on text/email/url/date, min/max value on number, `values` enum for select, relation id string; hidden fields excluded; required-with-default fields optional on create; empty patches rejected)
-  - field metadata schema (`src/lib/collection.ts`) validates the constraint options per type at collection save time (strict object, no unknown keys)
-  - `migrations/001_init.sql` (edited in place, pre-launch): `_superusers` seed metadata now carries `password` min 8 / max 128 and `email` max 254 — collection-level `options.minPasswordLength` removed; superusers create route reads constraints from metadata
-- **Scope:**
-  - Replace the `records.route.ts` stub: `GET /` (list), `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id`
-  - Pagination (page/perPage or cursor — pick one, document), sorting, filtering (initially simple `field=value` params; the full rule language arrives in Phase 3)
-  - Hidden fields excluded from all responses (`getNonHiddenCollectionField` already exists)
-  - Per-type field validation on write: wire `buildRecordCreateSchema`/`buildRecordUpdateSchema` (done, see foundation) plus `relation` existence checks; `file` (reject until Phase 5)
-  - Required/unique enforcement errors mapped to correct codes (reuse `mapD1Error` for constraint failures)
-  - Auth collections: password write goes through `hashPassword`, `verifyPassword` never leaks; `password` never returned
-  - Guard rails: records API rejects `view` collections for writes (Phase 4 relaxes reads), rejects system collections per rules
-- **Files:** `src/routes/records.route.ts`, `src/services/records.service.ts`, `src/lib/record-schema.ts` (done), `tests/records.test.ts`
+- **Done:**
+  - routes `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id` (replacing the stub); every action resolves the collection through `getCompiledCollectionByIdOrName` so the raw rules and compiled artifacts travel with the metadata
+  - list: PocketBase-style pagination (`page` from 1, `perPage` default 30 / max 500), `sort=-field,field` (default `-createdAt,id`), simple exact-match `field=value` filters with per-type coercion (number/bool/date normalized like writes; json/file rejected; `password` banned); envelope `{ page, perPage, totalItems, totalPages, items }`
+  - write path: `buildRecordCreateSchema`/`buildRecordUpdateSchema` + relation existence checks (missing target record/collection → 400) + value normalization (dates → RFC 3339 ms Z, bools → 0/1, json → JSON text; `file` rejected until Phase 5) + auth passwords hashed via `hashPassword`; ids generated app-side like PocketBase
+  - responses always pass through `presentRecord`: hidden fields stripped, `password` never serialized, json/booleans rehydrated; implicit `id`/`createdAt`/`updatedAt` always projected
+  - guard rails: `view` collections are read-only for writes; `_collections` metadata rows are never writable through the records API
+  - timestamps: every date-class column (including implicit `createdAt`/`updatedAt` defaults) stores RFC 3339 UTC with milliseconds via the shared `SQL_NOW` expression, so rule comparisons and `@now` are lexicographically correct
+  - tests at `tests/records.test.ts`
 - **Depends on:** 2.1 (auth for context), 1.2 (middleware)
 - **Acceptance:**
-  - CRUD roundtrip for a base collection, including validation failures with `VALIDATION_ERROR`/`CONFLICT` codes
-  - hidden field (e.g. `password`) never appears in list/get/create/update responses
-  - collections with a `null` rule require superuser; collections with an empty (`""`) rule are open to everyone
-  - tests at `tests/records.test.ts`
+  - CRUD roundtrip for a base collection, including validation failures with `VALIDATION_ERROR`/`CONFLICT` codes ✅
+  - hidden field (e.g. `password`) never appears in list/get/create/update responses ✅
+  - collections with a `null` rule require superuser; collections with an empty (`""`) rule are open to everyone ✅
+  - tests at `tests/records.test.ts` ✅
 
 ---
 
@@ -147,20 +142,21 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
   - collection create/update rejects invalid rules with 400 `VALIDATION_ERROR` and a readable message
   - valid rules compile deterministically; compiler output unit-tested for the standard rule surface (id/email/fields, `@request.auth.id`, `@request.body.*`, `:isset`/`:changed`, `@now`)
 
-### 3.4 [ ] Runtime rule enforcement in the records layer
+### 3.4 [x] Runtime rule enforcement in the records layer
 
 - **Goal:** every record action consults the compiled rule; superusers bypass.
-- **Scope:**
-  - Query builder merges compiled rule SQL into `WHERE` (view/update/delete compile as extra `id = ? AND (<rule-sql>)` terms; list ANDs into the rows and count queries; create merges the predicate into `INSERT … SELECT … WHERE (<rule-sql>)`)
-  - Semantics: `null` rule → superuser only (403); `''` → everyone; expression false/NULL → list 200 partial, create 400, view/update/delete 404 (spec §2)
-  - Rules never add identifiers to SQL: field refs are compiled at save time, all request values are bound parameters
-  - Return 404 (not 403) for rule-filtered single-record reads/updates; locked rules are 403 (pocketbase semantics)
-- **Files:** `src/services/records.service.ts`, `src/routes/records.route.ts`
+- **Done:**
+  - `src/lib/record-rules.ts`: `assertRuleAllowsAction` (locked `null` → 403 before any body handling, reusing `superUserRequired` semantics) and `buildRuleFilter` (superuser bypass → no predicate; exact `""` → no predicate, artifact not required; expression → `resolveRule` with the sanitized auth context, per-action body/candidate/row context, request-scoped `@now`)
+  - query builders merge the predicate per spec §6.2: list ANDs rule + user filters into the rows and count queries; view `id = ? AND (<rule-sql>)`; create `INSERT … SELECT ?values WHERE (<rule-sql>)` (atomic check-and-write); update `UPDATE … WHERE id = ? AND (<rule-sql>)`; delete `DELETE … WHERE id = ? AND (<rule-sql>)`; rules never add identifiers to SQL (field refs compiled at save time, all values bound)
+  - status mapping per spec §2: locked → 403; list false/NULL → 200 partial; create denied → generic 400 `"Failed to create record"`; view/update/delete denied → 404 (no existence oracle)
+  - corrupt metadata (non-empty rule without a compiled artifact) fails closed with 500 `DATABASE_ERROR`
+  - tests at `tests/rules.test.ts`: 5 actions × (superuser / matched / denied / anonymous), `@now`, `:isset`, `:changed`, `false`-rule evaluation, SQL-injection rejection at save time, fail-closed artifact
+- **Files:** `src/services/records.service.ts`, `src/routes/records.route.ts`, `src/lib/sql-query.ts`, `src/lib/record-rules.ts`
 - **Depends on:** 3.3, 2.2
 - **Acceptance:**
-  - matrix tests: each of the 5 rule actions × (superuser / authed user matched by rule / authed user denied / anonymous attempted)
-  - injection attempts in rule strings fail at compile time (no SQL injection possible through rules)
-  - no rule parse/compile cost on the request hot path
+  - matrix tests: each of the 5 rule actions × (superuser / authed user matched by rule / authed user denied / anonymous attempted) ✅
+  - injection attempts in rule strings fail at compile time (no SQL injection possible through rules) ✅
+  - no rule parse/compile cost on the request hot path ✅ (compiled artifacts are only slot-resolved, never parsed/recompiled)
 
 ### 3.5 [ ] Rules v1.1: relation traversal and `@collection.*`
 

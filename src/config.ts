@@ -1,4 +1,4 @@
-import { Collection } from "./services/collection.service";
+import { Collection, CompiledCollection } from "./services/collection.service";
 
 export type Bindings = {
 
@@ -20,10 +20,13 @@ export type AuthContext = {
 export type Variables = {
   auth: AuthContext | null;
   collectionContext: Collection | null;
+  // records routes need the raw rule text plus the compiled artifacts, which
+  // the public collection getters deliberately never select
+  // (getCompiledCollectionByIdOrName); set by the records router middleware
+  compiledCollectionContext: CompiledCollection | null;
 }
 
 export type HonoApp = {
   Bindings: Bindings;
   Variables: Variables;
 }
-
