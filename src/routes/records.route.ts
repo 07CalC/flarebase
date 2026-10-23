@@ -3,6 +3,7 @@ import { HonoApp } from "../config";
 import { AppError, error, ResponseCode, success } from "../lib/response";
 import { readJsonBody } from "../lib/request";
 import { formatZodIssues } from "../lib/collection";
+import { isSuperusersCollection } from "../lib/auth";
 import { quoteIdent } from "../lib/collection-name";
 import { hashPassword } from "../lib/hash";
 import {
@@ -445,12 +446,21 @@ recordsRouter.delete("/:id", async (c) => {
   const ruleFilter = buildRuleFilter(collection, "delete", c.get("auth"), {
     now: requestNow(),
   });
-  const deleted = await recordService.deleteRecordById(
-    c.env.DB,
-    collection,
-    c.req.param("id"),
-    ruleFilter,
-  );
+  // _superusers uses the guarded delete: emptying the table would reopen the
+  // anonymous bootstrap window (there is no other admin recovery path)
+  const deleted = isSuperusersCollection(collection.name)
+    ? await recordService.deleteSuperuserById(
+        c.env.DB,
+        collection,
+        c.req.param("id"),
+        ruleFilter,
+      )
+    : await recordService.deleteRecordById(
+        c.env.DB,
+        collection,
+        c.req.param("id"),
+        ruleFilter,
+      );
   if (!deleted) {
     return error(c, "Record not found", 404, ResponseCode.NOT_FOUND);
   }

@@ -132,6 +132,52 @@ export async function deleteRecordById(
   }
 }
 
+/**
+ * Delete for the `_superusers` system collection with an atomic
+ * last-superuser guard. Emptying the table would silently reopen the public
+ * bootstrap window (`createRecordOnlyIfEmpty`), so at least one row must
+ * always remain. The count check and delete are one statement, so concurrent
+ * deletes can never remove the final superuser.
+ *
+ * Returns `null` for a missing/filtered row (surface 404, no existence
+ * oracle); an existing row blocked by the guard raises 409.
+ */
+export async function deleteSuperuserById(
+  db: D1Database,
+  collection: Collection,
+  recordId: string,
+  filter?: SqlFilter | null,
+) {
+  try {
+    const values: unknown[] = [recordId];
+    let where = "id = ?";
+    if (filter) {
+      where += ` AND (${filter.sql})`;
+      values.push(...filter.values);
+    }
+    where += ` AND (SELECT COUNT(*) FROM ${quoteIdent(collection.name)}) > 1`;
+    const result = await db
+      .prepare(
+        `DELETE FROM ${quoteIdent(collection.name)} WHERE ${where} RETURNING *`,
+      )
+      .bind(...values)
+      .first();
+    if (result) return result;
+    // rule-filtered deletes keep the no-oracle 404 behavior
+    if (filter) return null;
+    if (await recordExists(db, collection, recordId)) {
+      throw new AppError(
+        "Cannot delete the last superuser",
+        409,
+        ResponseCode.CONFLICT,
+      );
+    }
+    return null;
+  } catch (error) {
+    mapD1Error(error);
+  }
+}
+
 // Existence probe for relation validation; never projects field values.
 export async function recordExists(
   db: D1Database,

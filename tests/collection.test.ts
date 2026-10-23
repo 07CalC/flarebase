@@ -470,6 +470,7 @@ describe("GET /api/collections", () => {
     const names = res.body.data.map((c: any) => c.name);
     expect(names).toContain("_superusers");
     expect(names).toContain("_sessions");
+    expect(names).toContain("_files");
     expect(names).toContain("users");
     for (const col of res.body.data) {
       expect(Array.isArray(col.fields)).toBe(true);
@@ -484,7 +485,7 @@ describe("GET /api/collections", () => {
     });
     const res = await superApi(ctx, "GET", "/api/collections");
     expect(res.body.data.map((c: any) => c.name)).toContain("posts");
-    expect(res.body.data).toHaveLength(4);
+    expect(res.body.data).toHaveLength(5);
   });
 });
 

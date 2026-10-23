@@ -28,13 +28,14 @@ function hashedTestPassword(): Promise<string> {
 }
 
 // Tables that must survive the per-test reset: the migrated schema
-// (_collections, _superusers, _sessions, _migrations) plus migration
+// (_collections, _superusers, _sessions, _files, _migrations) plus migration
 // bookkeeping tables (applyD1Migrations uses `migrations` per vitest.config
 // / wrangler.jsonc; `d1_migrations` is its default name).
 const PROTECTED_TABLES = new Set([
   "_collections",
   "_superusers",
   "_sessions",
+  "_files",
   "_migrations",
   "migrations",
   "d1_migrations",
@@ -63,6 +64,7 @@ async function resetDatabase(db: D1Database): Promise<void> {
   await db.prepare(`DELETE FROM _collections WHERE system = 0`).run();
   await db.prepare(`DELETE FROM _sessions`).run();
   await db.prepare(`DELETE FROM _superusers`).run();
+  await db.prepare(`DELETE FROM _files`).run();
   // restore the seed state of system collections in case a test patched them
   await db
     .prepare(

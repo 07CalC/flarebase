@@ -55,6 +55,8 @@ The list endpoint supports:
 
 The list response `data` is `{ page, perPage, totalItems, totalPages, items }`. Write requests are validated against the field metadata stored in `_collections` (per-type constraints, `values`, relation targets), dates are normalized to RFC 3339 UTC with milliseconds, and hidden fields are never part of a response.
 
+Superusers are managed through the same records endpoints under `/api/collections/_superusers/records`. They remain superuser-only once the first account exists; the only open path is creating the first one while `_superusers` is empty. Passwords are hashed on create and update (a `PATCH` with `password` replaces it) and hashes are never returned. The last remaining superuser cannot be deleted (`409`), because an empty table would reopen anonymous bootstrap.
+
 ## view collections
 
 A collection created with `"type": "view"` is backed by a SQLite view instead of a table. The create payload carries the single-statement query in `options.query` and the `fields` are resolved from the query columns automatically, so `fields`/`indexes` are rejected both on create and on later patches:

@@ -57,4 +57,4 @@ api rules are ahead of time evaluated and stored in the `_collections` collectio
 
 **superusers** collection is also auth type system collection which is used to store the superuser accounts. superusers have full access to all collections and can perform any action on any collection. superusers can be created, updated and deleted using the flarebase dashboard or the api by other superusers.
 
-superusers can be created by other superusers or by anyone when there are no superusers in the system. this is done to allow for the initial setup of the system. once a superuser is created, only other superusers can create new superusers.
+superusers can be created by other superusers or by anyone when there are no superusers in the system. this is done to allow for the initial setup of the system. once a superuser is created, only other superusers can create new superusers. the last remaining superuser cannot be deleted: an empty table would silently reopen the public bootstrap window, so the delete is rejected with `409 CONFLICT`.

@@ -197,13 +197,17 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
   - invalid query → 400 (non-SELECT, multi-statement, reserved identifier, `password`, missing `id`, bad column name, broken SQL) ✅
   - rename/delete cleans up the view (`sqlite_master` has no leftovers) ✅
 
-### 4.2 [ ] Superuser management via records API
+### 4.2 [x] Superuser management via records API
 
 - **Goal:** `_superusers` fully manageable through the same records endpoints (dogfooding).
-- **Scope:**
-  - Records endpoints already callable as superuser on `_superusers` (write flows through `type: auth` handling → `hashPassword`)
-  - Guardrails: can't demote/delete the last superuser; bootstrap window logic (from 2.1) must consider this CRUD path
-- **Files:** `src/services/records.service.ts` (auth-collection hooks), `tests/records-auth.test.ts`
+- **Done:**
+  - the whole CRUD surface works through `/api/collections/_superusers/records`: `POST` still goes through the bootstrap-aware `superuserRouter` (anonymous creation only while the table is empty, superusers only afterwards), while `GET`/`PATCH`/`DELETE` fall through to the records router and the `null` rules keep them superuser-only
+  - auth-collection write handling is shared, so `PATCH` hashes a new password (`pbkdf2$…`, verified by the login endpoint with the new password and rejected with the old one); omitted fields stay untouched
+  - every response goes through `presentRecord`/`sanitizeAuthRecord`, so the password hash never appears in list/get/create/update/delete payloads, and hidden fields stay hidden
+  - `deleteSuperuserById` guards the table atomically: `DELETE … AND (SELECT COUNT(*) FROM "_superusers") > 1 RETURNING *`; deleting the last row returns `409 CONFLICT "Cannot delete the last superuser"` (emptying the table would reopen anonymous bootstrap, so this is a security invariant), while unknown ids keep returning `404`
+  - there is no separate "demote" operation — superuser status is membership in `_superusers`, and deletion is the only removal path, so the last-row guard closes the lockout/re-bootstrap vector
+  - `tests/records-auth.test.ts` covers list/read redaction, anonymous + non-superuser lockout, email/password updates, login with the new password, validation and unique conflicts, last-superuser rejection, an allowed delete while another remains, unknown ids, and concurrent deletes
+- **Files:** `src/routes/records.route.ts`, `src/services/records.service.ts`, `src/lib/auth.ts`, `tests/records-auth.test.ts`, `tests/superusers.test.ts`
 - **Depends on:** 2.1, 2.2
 - **Acceptance:** superuser list/create/update/delete on `_superusers` via records API with hashing + no password leakage; lockout impossible.
 
@@ -211,13 +215,16 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
 
 ## Phase 5 — Files
 
-### 5.1 [ ] `_files` system collection + R2 wiring
+### 5.1 [x] `_files` system collection + R2 wiring
 
 - **Goal:** metadata + storage substrate for the `file` field type.
-- **Scope:**
-  - Migration `003_files.sql`: `_files` table (id, collectionId, recordId, field, filename, size, mime, checksum, storageKey, createdAt/updatedAt) plus the `_collections` system row
-  - `wrangler.jsonc`: R2 bucket binding
-- **Files:** `migrations/003_files.sql`, `wrangler.jsonc`, `src/config.ts`
+- **Done:**
+  - `migrations/003_files.sql` creates `_files` (`id`, `collectionId`, `recordId`, `field`, `filename`, `size`, `mime`, `checksum`, `storageKey` unique, `createdAt`/`updatedAt`) with an index on `(collectionId, recordId)`
+  - the migration also seeds the `_files` row in `_collections`: `system = 1`, `type = "base"`, metadata-only fields/indexes and all five rules `null` (superuser-only until the file service owns writes in 5.2)
+  - the R2 `FILE_BUCKET` binding was already declared in `wrangler.jsonc`/generated types; a runtime test now proves the binding is available and usable
+  - the test reset keeps `_files` and clears its rows, so file tests get the same isolated baseline as the other system tables
+  - `tests/files.test.ts` covers list/detail visibility, schema columns, metadata immutability and the R2 binding; `tests/collection.test.ts` expectations include the new system collection
+- **Files:** `migrations/003_files.sql`, `wrangler.jsonc`, `src/config.ts`, `tests/setup.ts`, `tests/files.test.ts`, `tests/collection.test.ts`
 - **Depends on:** 1.3
 - **Acceptance:** migration applies; `_files` visible in collection list as system collection.
 
