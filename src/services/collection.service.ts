@@ -1,7 +1,12 @@
-import { compileRuleSet, formatRuleErrors } from "../api-rules";
+import {
+  compileRuleSet,
+  formatRuleErrors,
+  ruleDependencies,
+} from "../api-rules";
 import type {
   CompiledRuleSet,
   CompileRuleSetOptions,
+  RuleCollectionRef,
   RuleField,
 } from "../api-rules";
 import {
@@ -245,6 +250,166 @@ function fieldNamesOf(fields: CollectionFieldInput[] | Field[]): Set<string> {
   return new Set(fields.map((f) => f.name));
 }
 
+// ---------------------------------------------------------------------------
+// rule compilation context: relation traversal and @collection.* need
+// metadata for other collections. Everything is preloaded into an in-memory
+// resolver so the compiler stays pure and synchronous.
+
+interface RuleCollectionOverride {
+  id: string;
+  name: string;
+  fields: RuleField[];
+  /** views only address id/createdAt/updatedAt when the query selects them */
+  implicitFields: boolean;
+}
+
+/** Internal list that also carries parsed compiledRules (dependency scans). */
+async function listCompiledCollections(
+  db: D1Database,
+): Promise<CompiledCollection[]> {
+  const results = await allRows(
+    db,
+    `SELECT ${COLLECTION_SELECT}, compiledRules FROM _collections ORDER BY createdAt ASC, name ASC`,
+  );
+  return results.map((row) => {
+    const { compiledRules, ...rest } = row;
+    return {
+      ...parseCollectionRow(rest),
+      compiledRules: parseJsonField<CompiledRuleSet>(
+        compiledRules,
+        {},
+        "compiledRules",
+      ),
+    };
+  });
+}
+
+/**
+ * In-memory id/name resolver over preloaded metadata. `override` replaces the
+ * collection being written with its pending name/fields; the previous name
+ * stops resolving, so a rename breaks name-based `@collection.*` references
+ * with a compile error (surfaced as 400) instead of going stale.
+ */
+function makeRuleResolver(
+  collections: CompiledCollection[],
+  override?: RuleCollectionOverride,
+): (idOrName: string) => RuleCollectionRef | null {
+  const refs = new Map<string, RuleCollectionRef>();
+  const register = (source: {
+    id: string;
+    name: string;
+    fields: RuleField[];
+    implicitFields?: boolean;
+  }): void => {
+    const ref: RuleCollectionRef = {
+      id: source.id,
+      name: source.name,
+      fields: source.fields,
+      implicitFields: source.implicitFields,
+    };
+    refs.set(ref.id, ref);
+    refs.set(ref.name, ref);
+  };
+
+  let replaced = false;
+  for (const collection of collections) {
+    if (override && collection.id === override.id) {
+      replaced = true;
+      register(override);
+      continue;
+    }
+    register({
+      id: collection.id,
+      name: collection.name,
+      fields: collection.fields,
+      implicitFields: collection.type !== "view",
+    });
+  }
+  if (override && !replaced) register(override);
+
+  return (idOrName) => refs.get(idOrName) ?? null;
+}
+
+function ruleTextsOf(collection: Collection): RuleTexts {
+  return {
+    listRule: collection.listRule,
+    viewRule: collection.viewRule,
+    createRule: collection.createRule,
+    updateRule: collection.updateRule,
+    deleteRule: collection.deleteRule,
+  };
+}
+
+/**
+ * Cross-collection invalidation: every collection whose compiled artifacts
+ * reference the changed collection is recompiled against the pending metadata.
+ * A dependent that no longer compiles rejects the change (400) before anything
+ * is written. Returns the compiledRules updates to append to the write batch.
+ */
+function prepareDependentStatements(
+  db: D1Database,
+  collections: CompiledCollection[],
+  override: RuleCollectionOverride,
+): D1PreparedStatement[] {
+  const dependents = collections.filter(
+    (collection) =>
+      collection.id !== override.id &&
+      ruleDependencies(collection.compiledRules).includes(override.id),
+  );
+  if (dependents.length === 0) return [];
+
+  const resolveCollection = makeRuleResolver(collections, override);
+  const statements: D1PreparedStatement[] = [];
+  for (const dependent of dependents) {
+    const { compiled, errors } = compileRuleSet(
+      ruleTextsOf(dependent),
+      dependent.fields,
+      {
+        implicitFields: dependent.type !== "view",
+        sourceCollectionName: dependent.name,
+        resolveCollection,
+      },
+    );
+    if (errors.length > 0) {
+      throw new AppError(
+        `Cannot update collection "${override.name}": rules of collection "${dependent.name}" no longer compile: ${formatRuleErrors(errors)}`,
+        400,
+        ResponseCode.VALIDATION_ERROR,
+      );
+    }
+    statements.push(
+      db
+        .prepare(
+          `UPDATE _collections SET compiledRules = ?1, updatedAt = ${SQL_NOW} WHERE id = ?2`,
+        )
+        .bind(JSON.stringify(compiled), dependent.id),
+    );
+  }
+  return statements;
+}
+
+/** Refuses to delete a collection other collections' rules still reference. */
+async function assertCollectionNotReferenced(
+  db: D1Database,
+  existing: Collection,
+): Promise<void> {
+  const collections = await listCompiledCollections(db);
+  const dependents = collections.filter(
+    (collection) =>
+      collection.id !== existing.id &&
+      ruleDependencies(collection.compiledRules).includes(existing.id),
+  );
+  if (dependents.length === 0) return;
+  const names = dependents
+    .map((collection) => `"${collection.name}"`)
+    .join(", ");
+  throw new AppError(
+    `Cannot delete collection "${existing.name}": rules of ${names} reference it`,
+    400,
+    ResponseCode.VALIDATION_ERROR,
+  );
+}
+
 interface RuleTexts {
   listRule?: string | null;
   viewRule?: string | null;
@@ -326,6 +491,11 @@ export async function createCollection(
   }
   assertValidIndexes(indexes, fields);
 
+  const id = generateCollectionId();
+  const resolveCollection = makeRuleResolver(
+    await listCompiledCollections(db),
+    { id, name: input.name, fields, implicitFields: true },
+  );
   const compiledRules = compileRulesOrThrow(
     {
       listRule: input.listRule,
@@ -335,9 +505,9 @@ export async function createCollection(
       deleteRule: input.deleteRule,
     },
     fields,
+    { sourceCollectionName: input.name, resolveCollection },
   );
 
-  const id = generateCollectionId();
   const fieldsJson = JSON.stringify(fields);
   const indexesJson = JSON.stringify(indexes);
   const optionsJson = JSON.stringify(input.options ?? {});
@@ -505,8 +675,13 @@ async function createViewCollection(
 
   let fields: Field[];
   let compiledRules: CompiledRuleSet;
+  const id = generateCollectionId();
   try {
     fields = await resolveViewFields(db, input.name);
+    const resolveCollection = makeRuleResolver(
+      await listCompiledCollections(db),
+      { id, name: input.name, fields, implicitFields: false },
+    );
     compiledRules = compileRulesOrThrow(
       {
         listRule: input.listRule,
@@ -516,14 +691,17 @@ async function createViewCollection(
         deleteRule: input.deleteRule,
       },
       fields,
-      { implicitFields: false },
+      {
+        implicitFields: false,
+        sourceCollectionName: input.name,
+        resolveCollection,
+      },
     );
   } catch (err) {
     await dropViewIfExists(db, input.name);
     throw err instanceof AppError ? err : viewQueryError(err);
   }
 
-  const id = generateCollectionId();
   try {
     await runBatch(db, [
       db
@@ -617,11 +795,25 @@ async function updateViewCollectionById(
   }
 
   const effectiveRules = effectiveRuleTexts(existing, input);
+  const collections = await listCompiledCollections(db);
+  const override: RuleCollectionOverride = {
+    id: existing.id,
+    name,
+    fields,
+    implicitFields: false,
+  };
+  const resolveCollection = makeRuleResolver(collections, override);
   let compiledRules: CompiledRuleSet;
+  let dependentStatements: D1PreparedStatement[] = [];
   try {
     compiledRules = compileRulesOrThrow(effectiveRules, fields, {
       implicitFields: false,
+      sourceCollectionName: name,
+      resolveCollection,
     });
+    if (nameChanged || queryChanged) {
+      dependentStatements = prepareDependentStatements(db, collections, override);
+    }
   } catch (err) {
     if (rebuilt) await restoreView(db, existing, name);
     throw err;
@@ -650,6 +842,7 @@ async function updateViewCollectionById(
           JSON.stringify(compiledRules),
           existing.id,
         ),
+      ...dependentStatements,
     ]);
   } catch (err) {
     if (rebuilt) await restoreView(db, existing, name);
@@ -771,8 +964,20 @@ export async function updateCollectionById(
 
   // Any field change recompiles all five rules against the effective metadata,
   // and a patch may fix broken rules in the same write.
+  const nameChanged = name !== existing.name;
+  const fieldsChanged = input.fields !== undefined;
   const effectiveRules = effectiveRuleTexts(existing, input);
-  const compiledRules = compileRulesOrThrow(effectiveRules, fields);
+  const collections = await listCompiledCollections(db);
+  const override: RuleCollectionOverride = {
+    id: existing.id,
+    name,
+    fields,
+    implicitFields: true,
+  };
+  const compiledRules = compileRulesOrThrow(effectiveRules, fields, {
+    sourceCollectionName: name,
+    resolveCollection: makeRuleResolver(collections, override),
+  });
 
   const nextIndexes: Array<CollectionIndexInput | CollectionIndex> =
     input.indexes ?? existing.indexes;
@@ -807,6 +1012,15 @@ export async function updateCollectionById(
         existing.id,
       ),
   );
+
+  // dependent artifacts embed the old table name / target fields, so recompile
+  // them against the pending metadata in the same batch
+  if (nameChanged || fieldsChanged) {
+    statements.push(
+      ...prepareDependentStatements(db, collections, override),
+    );
+  }
+
   await runBatch(db, statements);
 
   const updated = await getCollectionById(db, existing.id);
@@ -835,6 +1049,7 @@ export async function deleteCollectionById(
       ResponseCode.INVALID_REQUEST,
     );
   }
+  await assertCollectionNotReferenced(db, existing);
   const dropStatement =
     existing.type === "view"
       ? `DROP VIEW IF EXISTS ${quoteIdent(existing.name)}`

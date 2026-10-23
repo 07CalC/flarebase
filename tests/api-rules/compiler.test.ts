@@ -4,9 +4,14 @@ import {
   compileRuleSet,
   formatRuleErrors,
   resolveRule,
+  ruleDependencies,
 } from "../../src/api-rules";
 import { RuleError } from "../../src/api-rules/errors";
-import type { RuleField, RuleKey } from "../../src/api-rules/types";
+import type {
+  RuleCollectionRef,
+  RuleField,
+  RuleKey,
+} from "../../src/api-rules/types";
 
 const FIELDS: RuleField[] = [
   { name: "title", type: "text" },
@@ -310,9 +315,6 @@ describe("api-rules compiler: validation", () => {
   });
 
   it("rejects reserved macros with specific messages", () => {
-    expect(compileError("@collection.news.author = @request.auth.id").message).toBe(
-      "@collection.* is not supported yet",
-    );
     expect(compileError('@request.query.x = "1"').message).toBe(
       "@request.query is not supported yet",
     );
@@ -401,6 +403,323 @@ describe("api-rules compiler: rule sets", () => {
         column: 18,
       },
     ]);
+  });
+});
+
+describe("api-rules compiler: relation traversal and @collection.*", () => {
+  const USERS: RuleCollectionRef = {
+    id: "col_users",
+    name: "users",
+    fields: [
+      { name: "name", type: "text" },
+      { name: "role", type: "select" },
+      { name: "views", type: "number" },
+      { name: "bornAt", type: "date" },
+      { name: "manager", type: "relation", collectionId: "col_users" },
+      { name: "data", type: "json" },
+      { name: "password", type: "text" },
+    ],
+  };
+  const POSTS: RuleCollectionRef = {
+    id: "col_posts",
+    name: "posts",
+    fields: [
+      { name: "title", type: "text" },
+      { name: "views", type: "number" },
+      { name: "author", type: "relation", collectionId: "col_users" },
+      { name: "editor", type: "relation", collectionId: "col_users" },
+      { name: "legacy", type: "relation" },
+    ],
+  };
+  const COLLECTIONS = [USERS, POSTS];
+  const resolveCollection = (idOrName: string) =>
+    COLLECTIONS.find((c) => c.id === idOrName || c.name === idOrName) ?? null;
+  const OPTIONS = {
+    sourceCollectionName: "posts",
+    resolveCollection,
+  };
+
+  function compileTraversal(
+    source: string,
+    action: Parameters<typeof compileRule>[1] = "list",
+  ) {
+    return compileRule(source, action, POSTS.fields, OPTIONS);
+  }
+
+  function compileUsers(
+    source: string,
+    action: Parameters<typeof compileRule>[1] = "list",
+  ) {
+    return compileRule(source, action, USERS.fields, {
+      sourceCollectionName: "users",
+      resolveCollection,
+    });
+  }
+
+  function compileTraversalError(
+    source: string,
+    action: Parameters<typeof compileRule>[1] = "list",
+  ): RuleError {
+    try {
+      compileTraversal(source, action);
+    } catch (err) {
+      if (err instanceof RuleError) return err;
+      throw err;
+    }
+    throw new Error("expected compileRule() to throw");
+  }
+
+  function compileUsersError(
+    source: string,
+    action: Parameters<typeof compileRule>[1] = "list",
+  ): RuleError {
+    try {
+      compileUsers(source, action);
+    } catch (err) {
+      if (err instanceof RuleError) return err;
+      throw err;
+    }
+    throw new Error("expected compileRule() to throw");
+  }
+
+  it("compiles a single-hop traversal to a correlated scalar subquery", () => {
+    expect(compileTraversal('author.name = "Alice"')).toEqual({
+      sql: '((SELECT __rel0."name" FROM "users" AS __rel0 WHERE __rel0."id" = "posts"."author") = ?)',
+      slots: [{ kind: "literal", value: "Alice" }],
+      collections: ["col_users"],
+    });
+  });
+
+  it("compiles multi-hop chains with nested subqueries", () => {
+    expect(compileTraversal('author.manager.name = "Bob"')).toEqual({
+      sql:
+        '((SELECT (SELECT __rel1."name" FROM "users" AS __rel1 WHERE __rel1."id" = __rel0."manager")' +
+        ' FROM "users" AS __rel0 WHERE __rel0."id" = "posts"."author") = ?)',
+      slots: [{ kind: "literal", value: "Bob" }],
+      collections: ["col_users"],
+    });
+  });
+
+  it("compiles comparison between a traversal and another traversal", () => {
+    expect(compileTraversal("author.name = editor.name")).toEqual({
+      sql:
+        '((SELECT __rel0."name" FROM "users" AS __rel0 WHERE __rel0."id" = "posts"."author")' +
+        ' = (SELECT __rel1."name" FROM "users" AS __rel1 WHERE __rel1."id" = "posts"."editor"))',
+      slots: [],
+      collections: ["col_users"],
+    });
+  });
+
+  it("compiles create traversals against the candidate relation value", () => {
+    expect(compileTraversal('author.name = "Alice"', "create")).toEqual({
+      sql: '((SELECT __rel0."name" FROM "users" AS __rel0 WHERE __rel0."id" = ?) = ?)',
+      slots: [
+        { kind: "record", path: "author" },
+        { kind: "literal", value: "Alice" },
+      ],
+      collections: ["col_users"],
+    });
+  });
+
+  it("supports LIKE and @now against traversed text/date fields", () => {
+    expect(compileTraversal('author.name ~ "Ali"')).toEqual({
+      sql: '((SELECT __rel0."name" FROM "users" AS __rel0 WHERE __rel0."id" = "posts"."author") LIKE ?)',
+      slots: [{ kind: "literal", value: "%Ali%" }],
+      collections: ["col_users"],
+    });
+    expect(compileTraversal("author.bornAt < @now")).toEqual({
+      sql: '((SELECT __rel0."bornAt" FROM "users" AS __rel0 WHERE __rel0."id" = "posts"."author") < ?)',
+      slots: [{ kind: "now" }],
+      collections: ["col_users"],
+    });
+  });
+
+  it("is deterministic including aliases and dependency lists", () => {
+    const options = OPTIONS;
+    const first = compileRule(
+      'author.name = "a" || editor.name = "b"',
+      "list",
+      POSTS.fields,
+      options,
+    );
+    const second = compileRule(
+      'author.name = "a" || editor.name = "b"',
+      "list",
+      POSTS.fields,
+      options,
+    );
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+    expect(first.collections).toEqual(["col_users"]);
+    expect(first.sql).toContain("__rel1");
+  });
+
+  describe("@collection.*", () => {
+    it("compiles a back-relation into an EXISTS subquery", () => {
+      expect(compileUsers("@collection.posts.author = id")).toEqual({
+        sql:
+          '(EXISTS (SELECT 1 FROM "posts" AS __rel0 WHERE (__rel0."author" = "users"."id")))',
+        slots: [],
+        collections: ["col_posts"],
+      });
+    });
+
+    it("keeps the SQL identical when the macro is on the right of =", () => {
+      expect(compileUsers("id = @collection.posts.author")).toEqual(
+        compileUsers("@collection.posts.author = id"),
+      );
+    });
+
+    it("inverts ordered comparisons and qualifies outer fields", () => {
+      expect(compileUsers("views > @collection.posts.views")).toEqual({
+        sql:
+          '(EXISTS (SELECT 1 FROM "posts" AS __rel0 WHERE (__rel0."views" < "users"."views")))',
+        slots: [],
+        collections: ["col_posts"],
+      });
+      expect(compileUsers("@collection.posts.views >= views")).toEqual({
+        sql:
+          '(EXISTS (SELECT 1 FROM "posts" AS __rel0 WHERE (__rel0."views" >= "users"."views")))',
+        slots: [],
+        collections: ["col_posts"],
+      });
+    });
+
+    it("compares against request macros and literals", () => {
+      expect(compileUsers("@collection.posts.author = @request.auth.id")).toEqual({
+        sql: '(EXISTS (SELECT 1 FROM "posts" AS __rel0 WHERE (__rel0."author" = ?)))',
+        slots: [{ kind: "auth", path: "id" }],
+        collections: ["col_posts"],
+      });
+      expect(compileUsers('@collection.posts.title ~ "x"')).toEqual({
+        sql: '(EXISTS (SELECT 1 FROM "posts" AS __rel0 WHERE (__rel0."title" LIKE ?)))',
+        slots: [{ kind: "literal", value: "%x%" }],
+        collections: ["col_posts"],
+      });
+    });
+
+    it("can reference the owning collection itself", () => {
+      expect(compileUsers("@collection.users.id = id")).toEqual({
+        sql:
+          '(EXISTS (SELECT 1 FROM "users" AS __rel0 WHERE (__rel0."id" = "users"."id")))',
+        slots: [],
+        collections: ["col_users"],
+      });
+    });
+  });
+
+  it("rejects malformed traversals and references", () => {
+    expect(compileTraversalError("ownr.name = 1").message).toBe(
+      'unknown field "ownr"',
+    );
+    expect(compileTraversalError("title.name = 1").message).toBe(
+      'cannot traverse "title.name": field "title" is not a relation',
+    );
+    expect(compileTraversalError('legacy.name = "x"').message).toBe(
+      'relation field "legacy" has no target collection',
+    );
+    expect(compileTraversalError("author.missing = 1").message).toBe(
+      'unknown field "missing" on collection "users"',
+    );
+    expect(compileTraversalError("author.data = 1").message).toBe(
+      'field "author.data" has type "json", which is not supported in rules yet',
+    );
+    expect(compileTraversalError('author.password = "x"').message).toBe(
+      'field "password" cannot be used in rules',
+    );
+    expect(compileTraversalError("author.views = \"5\"").message).toBe(
+      'cannot compare number field "author.views" with string literal using "="',
+    );
+  });
+
+  it("rejects reserved @collection.* forms", () => {
+    expect(compileUsersError("@collection.posts = id").message).toBe(
+      '@collection requires a collection and a field, e.g. "@collection.posts.id"',
+    );
+    expect(compileUsersError("@collection.posts.author.name = id").message).toBe(
+      "@collection paths cannot be nested",
+    );
+    expect(compileUsersError("@collection.news.author = id").message).toBe(
+      'unknown collection "news"',
+    );
+    expect(compileUsersError("@collection.posts.missing = id").message).toBe(
+      'unknown field "missing" on collection "posts"',
+    );
+    expect(compileUsersError("@collection.posts.password = id").message).toBe(
+      'field "password" cannot be used in rules',
+    );
+    expect(
+      compileUsersError('id ~ @collection.posts.title').message,
+    ).toBe('"~" is not supported with @collection.* on the right');
+    expect(
+      compileUsersError("@collection.posts.title = @collection.posts.views")
+        .message,
+    ).toBe("cannot compare two @collection.* expressions");
+    expect(
+      compileUsersError("@collection.posts.title:isset = true").message,
+    ).toBe("modifiers are not supported on @collection.*");
+  });
+
+  it("requires collection metadata for traversal and @collection.*", () => {
+    expect(compileError('author.name = "x"').message).toBe(
+      'relation traversal "author.name" requires collection metadata',
+    );
+    expect(compileError("@collection.posts.author = id").message).toBe(
+      "@collection.* requires collection metadata",
+    );
+  });
+
+  it("reports a relation pointing at a missing collection", () => {
+    const broken: RuleCollectionRef = {
+      id: "col_broken",
+      name: "broken",
+      fields: [{ name: "author", type: "relation", collectionId: "col_gone" }],
+    };
+    const err = (() => {
+      try {
+        compileRule('author.name = "x"', "list", broken.fields, {
+          sourceCollectionName: "broken",
+          resolveCollection,
+        });
+      } catch (e) {
+        return e as RuleError;
+      }
+      throw new Error("expected compileRule() to throw");
+    })();
+    expect(err.message).toBe(
+      'relation field "author" points to a collection that does not exist',
+    );
+  });
+
+  it("aggregates dependencies across a rule set", () => {
+    const { compiled, errors } = compileRuleSet(
+      {
+        listRule: 'author.name = "x"',
+        viewRule: "@collection.posts.author = id",
+        createRule: 'author.name = "y"',
+        updateRule: null,
+      },
+      POSTS.fields,
+      OPTIONS,
+    );
+    expect(errors).toEqual([]);
+    expect(compiled.listRule?.collections).toEqual(["col_users"]);
+    expect(compiled.viewRule?.collections).toEqual(["col_posts"]);
+    expect(ruleDependencies(compiled)).toEqual(["col_posts", "col_users"]);
+    // artifact without references keeps the v1 shape (no `collections` key)
+    expect(compiled.updateRule).toBeUndefined();
+    const plain = compileRuleSet({ listRule: 'title = "x"' }, POSTS.fields, OPTIONS);
+    expect(plain.compiled.listRule).toEqual({
+      sql: '("title" = ?)',
+      slots: [{ kind: "literal", value: "x" }],
+    });
+  });
+
+  it("resolves create-traversal record slots from the candidate row", () => {
+    const rule = compileTraversal('author.name = "Alice"', "create");
+    expect(
+      resolveRule(rule, { record: { author: "u1" } }).values,
+    ).toEqual(["u1", "Alice"]);
+    expect(resolveRule(rule, {}).values).toEqual([null, "Alice"]);
   });
 });
 

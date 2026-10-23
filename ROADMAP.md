@@ -158,15 +158,23 @@ Each task has: goal, scope, files touched, acceptance criteria (what must be tru
   - injection attempts in rule strings fail at compile time (no SQL injection possible through rules) ✅
   - no rule parse/compile cost on the request hot path ✅ (compiled artifacts are only slot-resolved, never parsed/recompiled)
 
-### 3.5 [ ] Rules v1.1: relation traversal and `@collection.*`
+### 3.5 [x] Rules v1.1: relation traversal and `@collection.*`
 
 - **Goal:** extend the rule language with `relationField.target.field` chains and `@collection.*` joins (deferred out of v1, see [API_RULES.md](./API_RULES.md) §9).
 - **Scope:**
   - Compiler resolves referenced collection metadata (stable `collectionId`) and emits correlated subqueries for single-valued relations
   - Cross-collection invalidation: collection rename/delete/field change recompiles (or rejects) every rule that references the affected collection; dependency list stored with the compiled artifact
-- **Files:** `src/api-rules/compiler.ts`, `src/services/collection.service.ts`
+- **Done:**
+  - parser accepts dotted field paths (`author.name`, `author.manager.name`) and `@collection.<name>.<field>` macro operands (lexer unchanged: `.` was already a token; `@collection.*` no longer reads as "not supported yet")
+  - compiler options `sourceCollectionName` + `resolveCollection(idOrName)`; the resolver is an in-memory map the service preloads, so compilation stays pure and synchronous (no I/O, deterministic aliases `__rel0`, `__rel1`, …)
+  - `relationField.target.field` compiles to nested scalar subqueries: row actions correlate `"posts"."author"`, `createRule` correlates the candidate value as a `record` slot (the row is not in the table yet); intermediate hops must be relations, `password` rejected at every hop, `json`/`file` rejected as final fields; empty/dangling relations make the hop `NULL` → comparison false (fail closed, even for `!=`)
+  - `@collection.*` compiles to `EXISTS (SELECT 1 FROM "<name>" AS __relN WHERE (<field> OP <value>))`: uniform "some row matches" semantics, ordered ops flipped when the macro is on the right, `~`/`!~` require the macro on the left, macro-vs-macro and modifiers rejected, non-macro operands that are plain fields are qualified with the owning table name so they cannot rebind inside the subquery
+  - artifacts that reference other collections gain `collections: [ids]` (sorted, omitted when empty) and `ruleDependencies(ruleSet)` unions them; `RuleCollectionRef.implicitFields` keeps views without implicit `id`/`createdAt`/`updatedAt`
+  - cross-collection invalidation in `collection.service.ts`: name/field changes (views: name/query) preview-recompile every dependent before writing — any failure is `400 VALIDATION_ERROR` naming dependents and rule errors — then append the dependent `compiledRules` updates to the same D1 batch; transitive dependency scans; deleting a referenced collection is `400` listing dependents; rules-only patches skip the scan
+  - tests: `tests/api-rules/compiler.test.ts` (exact canonical SQL, chains, create record slots, macro both sides/inversion/qualification, reserved forms, deps aggregation + `resolveRule` slot resolution) and `tests/rules-relations.test.ts` (list/view/update/delete/create enforcement through traversal and `@collection`, fail-closed dangling rows, rename recompile + enforcement, name-based macro rename rejection, field-removal rejection, add-field recompile, delete rejection with chain dependencies)
+- **Files:** `src/api-rules/compiler.ts`, `src/api-rules/parser.ts`, `src/api-rules/types.ts`, `src/services/collection.service.ts`, `tests/rules-relations.test.ts`
 - **Depends on:** 3.3, 3.4
-- **Acceptance:** chain/join rules compile deterministically; renaming or deleting a referenced collection keeps dependent artifacts correct (recompile or 400); enforcement covered by tests.
+- **Acceptance:** chain/join rules compile deterministically ✅; renaming or deleting a referenced collection keeps dependent artifacts correct (recompile or 400) ✅; enforcement covered by tests ✅.
 
 ---
 

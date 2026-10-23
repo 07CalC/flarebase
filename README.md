@@ -42,6 +42,8 @@ Session TTL can be overridden per deployment by setting `SESSION_TTL_SECONDS` un
 
 Records live under `/api/collections/{collection}/records`: `GET /` lists, `GET /{id}` reads, `POST /` creates, `PATCH /{id}` updates and `DELETE /{id}` deletes. Every action is guarded by the collection's API rule (`listRule`, `viewRule`, `createRule`, `updateRule`, `deleteRule`): `null` means superusers only, `""` is open to everyone, and expressions are evaluated server-side per [API_RULES.md](./API_RULES.md) (superusers bypass all rules).
 
+Rules can traverse relation fields (`author.team.name = "Red"`) and express back-relations with `@collection.*` (`@collection.posts.author = id`). Both compile to correlated subqueries at collection save time; the artifact records the referenced collection ids, so renaming or changing a referenced collection recompiles dependent rules (or rejects the change with `400` when a rule would break), and deleting a referenced collection is rejected while rules point at it.
+
 The list endpoint supports:
 
 | query param | default | description |

@@ -6,9 +6,9 @@ its storage format and its runtime enforcement. `ARCHITECTURE.md` states the inv
 this file pins the details, so lexer, parser, compiler and records enforcement can be
 built against a frozen contract.
 
-**Review decisions:** relation traversal and `@collection.*` are deferred to a follow-up
-task (roadmap 3.5); rules resolve `@request.auth.*` against the sanitized user; the
-`:isset`, `:changed` and `@now` specials are part of v1.
+**Review decisions:** the v1 specials are `:isset`, `:changed` and `@now`; rules resolve
+`@request.auth.*` against the sanitized user. v1.1 (roadmap 3.5) adds relation traversal
+(`relationField.target.field`) and `@collection.*` joins — see §3.7, §5.2 and §5.4.
 
 ---
 
@@ -28,9 +28,9 @@ A rule answers two questions at once: *who* may perform the action, and *which r
 the action applies to. Rules are part of the collection schema: they are validated and
 compiled when the collection is saved, never parsed on the request hot path.
 
-Out of v1 scope: relation traversal, `@collection.*`, the `:length` / `:lower` modifiers,
-datetime macros other than `@now`, the any-of (`?`) operator family, `manageRule` — all
-listed in §9 with reasons.
+Out of scope: the `:length` / `:lower` modifiers, datetime macros other than `@now`,
+the any-of (`?`) operator family, `manageRule` — all listed in §9 with reasons. Relation
+traversal and `@collection.*` are v1.1 features, specified in §3.7 (roadmap 3.5).
 
 ## 2. Core semantics
 
@@ -85,9 +85,11 @@ unary     := "!" unary
 comparison:= value op value
 op        := "=" | "!=" | ">" | ">=" | "<" | "<=" | "~" | "!~"
 
-value     := field | macro | now | literal | boolean
+value     := field | path | macro | now | literal | boolean
 field     := IDENT
+path      := IDENT ( "." IDENT )+            // relation traversal, §3.7
 macro     := "@request" "." ( "auth" | "body" ) "." IDENT
+           | "@collection" "." IDENT "." IDENT  // §3.7
 now       := "@now"
 literal   := STRING | NUMBER | "true" | "false" | "null"
 boolean   := "true" | "false" | isset | changed
@@ -106,7 +108,7 @@ changed   := "@request.body" "." IDENT ":changed"
   absence of short-circuiting is not observable.
 
 **Reserved, lexed, rejected with "not supported yet"** (clear message, not a lexer
-error): `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~`, `@collection.*`, datetime
+error): `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~`, datetime
 macros other than `@now` (`@todayStart`, …), `@request.query.*`, `@request.headers.*`,
 `@request.method`, `@request.context`, and the `:length` / `:lower` modifiers. Other
 modifier misuse is a specific compile error, not a generic one (`:changed` outside
@@ -272,6 +274,68 @@ listRule: @request.body is not available in list/view/delete rules
 Collection create/patch returns `400 VALIDATION_ERROR` with the aggregated message. No
 invalid rule is ever stored.
 
+### 3.7 Relation traversal and `@collection.*` (v1.1)
+
+Both forms need metadata beyond the owning collection, so the compiler takes the owning
+collection's name (`sourceCollectionName`) plus an in-memory resolver
+(`resolveCollection(idOrName)`) preloaded by the service. Everything else about
+compilation is unchanged: pure, deterministic, save-time.
+
+**`relationField.target.field` chains.** The root must be a `relation` field with a
+`collectionId`; each intermediate segment must be a relation on the reached collection;
+the final segment may be any supported field type. `password` is rejected at every hop;
+`json`/`file` are rejected as final fields. Examples: `author.name`, `author.team.name`,
+`author.manager = @request.auth.id`.
+
+Compilation is a nested scalar subquery, one level per hop, with deterministic aliases
+(`__rel0`, `__rel1`, …) numbered outermost-first:
+
+```
+author.name         →  (SELECT __rel0."name" FROM "users" AS __rel0
+                        WHERE __rel0."id" = "posts"."author")
+author.team.name    →  (SELECT (SELECT __rel1."name" FROM "teams" AS __rel1
+                                WHERE __rel1."id" = __rel0."team")
+                        FROM "users" AS __rel0
+                        WHERE __rel0."id" = "posts"."author")
+```
+
+- Row actions correlate on the owning table's column (`"posts"."author"`); `createRule`
+  correlates on the candidate value (`record` slot, `?`), because the row is not in the
+  table yet. Deeper hops always follow the stored target rows.
+- An empty, dangling or missing relation makes the hop subquery `NULL`, so any comparison
+  against it is false — including `!=`. Fail closed: `author.name != "Alice"` does **not**
+  match posts without a resolvable author. Use `author.name = null` / `!= null` to test
+  the relation itself (`IS NULL` / `IS NOT NULL`).
+- Comparison classes follow §3.5 with the final field's type (`author.views > 10`,
+  `author.team.name = "Red"`, `author.name ~ "Ali"`, `author.bornAt < @now`).
+- Traversal never applies the target collection's rules: like hidden fields on the owning
+  collection, this is metadata-level row access gated solely by the rule that contains it.
+
+**`@collection.<collectionName>.<field>`** — "at least one row satisfies the comparison"
+(PocketBase's any-of back-relation form, single-valued):
+
+```
+@collection.posts.author = id
+  → (EXISTS (SELECT 1 FROM "posts" AS __rel0
+             WHERE (__rel0."author" = "users"."id")))
+```
+
+- The collection is resolved by name (an id also resolves, names are canonical). The named
+  field obeys the same restrictions as any operand (`password`, `json`/`file`).
+- Uniform `EXISTS` semantics for every operator: `@collection.posts.views > 10` is "some
+  post has views > 10". With the macro on the right of an ordered comparison the inner
+  comparison is flipped (`outer > macro` ⇔ `field < outer` for some row); `=`/`!=` are
+  symmetric, and `~`/`!~` require the macro on the left.
+- Comparisons where the other side is present are compiled with the owning table's name
+  qualified (`"users"."id"`), so plain field refs cannot rebind to the subquery's table.
+- `@collection.*` on both sides, nested paths (`@collection.a.b.c`) and modifiers
+  (`:isset`) are compile errors.
+- `!=` is existential ("some row differs"); for "no row matches" negate the whole
+  comparison: `!(@collection.posts.author = id)`.
+
+Both forms record every referenced collection id in the artifact's `collections` list
+(§5.1), which drives cross-collection invalidation (§5.4).
+
 ## 4. Evaluation contexts
 
 ### 4.1 Record context per action
@@ -369,9 +433,14 @@ Invariants:
   (`@request.*.<path>` presence → `1`/`0`), `now` (the request timestamp). D1 bind values
   are string/number/null; booleans normalize to `1`/`0` when resolved.
 - Compilation is deterministic: same rule + same field metadata ⇒ byte-identical
-  artifact (unit-tested).
-- Compilation is pure in v1: operands are limited to this collection's fields and request
-  macros, so no database lookups are needed to compile.
+  artifact (including subquery aliases and dependency lists; unit-tested).
+- Compilation is pure: the service preloads the owning collection and every reachable
+  collection into an in-memory resolver passed via options; the compiler itself performs
+  no I/O and issues no database queries.
+- Artifacts that reference other collections (traversal or `@collection.*`) carry a
+  `collections` array of referenced collection ids, sorted and unique; it is omitted when
+  empty (existing v1 artifacts stay shape-identical). `ruleDependencies(ruleSet)` unions
+  the lists across the five rules.
 
 ### 5.2 When compilation happens
 
@@ -382,8 +451,14 @@ Invariants:
   field that a stored rule references makes the patch fail with `400`, unless the same
   patch updates the offending rule(s). Renaming a field is remove+add in the metadata
   model, so "rename + fix rules" is one PATCH.
-- Renaming a collection does not invalidate artifacts: they reference columns, not the
-  table name (one of the reasons relation traversal is deferred, §9).
+- Compilation always uses the pending metadata: the owning collection is resolved from
+  its next state (name/fields being written), so self-references see what this same save
+  is about to persist.
+- Renaming a collection recompiles the artifacts of every dependent collection in the
+  same batch: traversals embed the referenced table's physical name. A name-based
+  `@collection.*` reference cannot survive a rename (`unknown collection "old"`), so the
+  rename is rejected with `400` until the dependent rule is updated — clear the rule,
+  rename, re-add it against the new name (§5.4).
 - System collections use the same path; their seeded rules are `null`.
 
 ### 5.3 Loading at request time
@@ -393,6 +468,31 @@ Invariants:
   unchanged, so artifacts are never serialized into collection API responses.
 - For a non-empty, non-locked rule, a missing/invalid artifact is corrupt metadata and
   fails closed with `500 DATABASE_ERROR`, consistent with `parseJsonField` behavior.
+
+### 5.4 Cross-collection invalidation
+
+Artifacts embed other collections' physical table names (traversal) and, for
+`@collection.*`, a name that must keep resolving. Stored metadata alone cannot know that
+a rule elsewhere needs rewriting, so every artifact records its dependencies (§5.1) and
+collection writes act on them:
+
+- **Name or field change** (views: name or query change) on collection `X`: find every
+  collection whose `compiledRules` reference `X.id` and recompile its five rules against
+  the pending `X`. Dependents are compiled *before* the batch is sent; a failure rejects
+  the change with `400 VALIDATION_ERROR` naming the dependent collection and the rule
+  error, and nothing is written. On success, the dependent `compiledRules` updates are
+  appended to the same D1 batch as the metadata update, so name/artifact text commit
+  atomically.
+- Dependencies are transitive: an artifact lists every collection touched by a chain, so
+  `posts` rules traversing `author.team.name` are recompiled when `members` **or**
+  `teams` changes.
+- **Delete** of a collection referenced by any rule is rejected with `400
+  VALIDATION_ERROR` listing the dependent collections. Remove or update those rules
+  first.
+- Rules-only patches (no name/field/query change) cannot affect dependents: their
+  artifacts only reference identifiers and metadata, so the scan is skipped.
+- Dependents are recompiled with `implicitFields` matching their own type (views have no
+  implicit columns), exactly like their own saves.
 
 ## 6. Enforcement
 
@@ -480,14 +580,29 @@ Collection `posts`: `title:text`, `status:select(draft|published)`, `author:rela
 | clients may not change status (update) | `@request.body.status:changed = false` |
 | publish date cannot be in the past | `@request.body.publishAt >= @now` |
 | only popular rows may be updated | `views >= 100 && author = @request.auth.id` |
+| only rows by Alice's reports (2 hops) | `author.manager.name = "Alice"` |
+| members who have at least one post (`@collection`) | `@collection.posts.author = id` |
 | superusers only | `null` |
 | nobody (not even via expression) | `false` |
+
+With the relation fixtures from §3.7 the last two compile to:
+
+```text
+author.manager.name = "Alice"
+  → ((SELECT (SELECT __rel1."name" FROM "users" AS __rel1
+               WHERE __rel1."id" = __rel0."manager")
+       FROM "users" AS __rel0
+       WHERE __rel0."id" = "posts"."author") = ?)
+
+@collection.posts.author = id
+  → (EXISTS (SELECT 1 FROM "posts" AS __rel0
+              WHERE (__rel0."author" = "users"."id")))
+```
 
 ## 9. Deferred (explicitly not in v1)
 
 | feature | reason / path back |
 | --- | --- |
-| relation traversal `rel.field`, `@collection.*` | compiled artifacts would embed other collections' physical names; renames/deletes would require cross-collection recompilation and dependency tracking. Roadmap 3.5, with a dependency-aware recompile step. |
 | `?=` `?~` and the rest of the any-of family | only meaningful with multi-value fields (multi-relation/multi-select/multi-file), which the schema does not have yet |
 | `:length` modifier | needs multi-value fields to be meaningful |
 | `:lower` modifier | SQLite `LOWER` is ASCII-only without ICU; needs a deliberate collation story |
@@ -497,6 +612,10 @@ Collection `posts`: `title:text`, `status:select(draft|published)`, `author:rela
 | list timing mitigation | hardening only; PocketBase rate-limits repeated list probes |
 | `filter` query param | 2.2 ships a simple form; the lexer/parser here will later back the full filter language |
 
+Relation traversal and `@collection.*` were deferred from v1 but landed in v1.1
+(roadmap 3.5) — see §3.7, §5.1 and §5.4 for the implemented semantics, artifact
+format and cross-collection invalidation.
+
 ## 10. Implementation plan
 
 | step | files | notes |
@@ -505,6 +624,7 @@ Collection `posts`: `title:text`, `status:select(draft|published)`, `author:rela
 | 3.2 parser + AST | `src/api-rules/parser.ts` | unit tests: precedence, grouping, malformed input, error positions |
 | 3.3 compiler + resolver | `src/api-rules/compiler.ts` | unit tests: type checks, modifier expansions, `@now`, artifact determinism, slot order; wire into `collection.service.ts`; add `compiledRules` by editing `migrations/001_init.sql` (pre-launch policy; local dev state must be reset); update rule fixtures in `tests/collection.test.ts` (e.g. the `owner` field) |
 | 3.4 enforcement | `src/routes/records.route.ts`, `src/services/records.service.ts` | depends on 2.2 records CRUD; matrix tests (`tests/rules.test.ts`): 5 actions × superuser / matching user / non-matching user / anonymous, plus injection attempts, modifiers, `@now`, and locked/open fast paths |
+| 3.5 rules v1.1 | `src/api-rules/compiler.ts`, `src/services/collection.service.ts` | relation traversal + `@collection.*` (§3.7); dependency lists in artifacts (§5.1) and cross-collection invalidation (§5.4); tests `tests/api-rules/compiler.test.ts` + `tests/rules-relations.test.ts` |
 
 The compiler (3.1–3.3) has no dependency on 2.2 and can land first; enforcement lands
 together with (or immediately after) the records CRUD routes, since each route needs its

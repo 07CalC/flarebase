@@ -89,7 +89,7 @@ function describeToken(token: Token): string {
 function describeValue(node: ValueExpr): string {
   switch (node.type) {
     case "field":
-      return `field "${node.name}"`;
+      return `field "${[node.name, ...(node.path ?? [])].join(".")}"`;
     case "macro":
       return `"@${node.segments.join(".")}"`;
     case "now":
@@ -243,10 +243,20 @@ class Parser {
     switch (token.kind) {
       case "ident": {
         this.next();
+        // dotted field paths (relation traversal) are validated by the
+        // compiler; the parser only builds the chain
+        const path: string[] = [];
+        while (this.peek().kind === "dot") {
+          this.next();
+          path.push(this.expect("ident", 'a field name after "."').text);
+        }
+        const end = this.tokens[this.index - 1] ?? token;
         return withSpan<FieldRef>(
-          { type: "field", name: token.text },
+          path.length > 0
+            ? { type: "field", name: token.text, path }
+            : { type: "field", name: token.text },
           token,
-          token,
+          end,
         );
       }
       case "string": {

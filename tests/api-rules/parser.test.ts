@@ -117,6 +117,30 @@ describe("api-rules parser", () => {
     expect(macro(left).segments).toEqual(["request", "auth", "id"]);
   });
 
+  it("parses dotted field paths (relation traversal)", () => {
+    const single = comparison(parseRule("author.name = 1")).left;
+    expect(single).toMatchObject({ type: "field", name: "author", path: ["name"] });
+    const chain = comparison(parseRule('author.team.name ~ "x"')).left;
+    expect(chain).toMatchObject({
+      type: "field",
+      name: "author",
+      path: ["team", "name"],
+    });
+    // plain fields keep the v1 shape (no `path` key)
+    expect(comparison(parseRule("title = 1")).left).not.toHaveProperty("path");
+  });
+
+  it("parses @collection macros", () => {
+    const left = comparison(parseRule("@collection.posts.author = id")).left;
+    expect(macro(left).segments).toEqual(["collection", "posts", "author"]);
+  });
+
+  it("rejects a dangling dot in a field path", () => {
+    expect(parseError("author. = 1").message).toBe(
+      'expected a field name after ".", found "="',
+    );
+  });
+
   it("parses @now", () => {
     expect(comparison(parseRule("@now > createdAt")).left).toMatchObject({
       type: "now",

@@ -85,6 +85,11 @@ export type ValueExpr = FieldRef | MacroRef | NowRef | ModifierRef | LiteralExpr
 export interface FieldRef extends NodeBase {
   type: "field";
   name: string;
+  /**
+   * Relation traversal segments after the root field, e.g. ["name"] for
+   * `author.name` (the root is always `name`). Absent for plain fields.
+   */
+  path?: string[];
 }
 
 export interface MacroRef extends NodeBase {
@@ -140,6 +145,12 @@ export interface CompiledRule {
   /** fully parenthesized boolean expression with bare `?` in slots order */
   sql: string;
   slots: CompiledRuleSlot[];
+  /**
+   * Collection ids this artifact depends on (relation traversals and
+   * `@collection.*` references), sorted and unique. Absent when empty.
+   * Used for cross-collection invalidation on rename/field change/delete.
+   */
+  collections?: string[];
 }
 
 /** Missing key = locked (superusers only). */
@@ -154,4 +165,23 @@ export interface RuleField {
   name: string;
   type: string;
   hidden?: boolean;
+  /** target collection id, relation fields only */
+  collectionId?: string;
+}
+
+/**
+ * Collection metadata a rule can reference: the collection owning the rule
+ * (via `CompileRuleSetOptions.sourceCollectionName`) and every relation target
+ * or `@collection.*` reference (via `resolveCollection`). Keeps the compiler
+ * pure: all lookups go through data the caller resolved.
+ */
+export interface RuleCollectionRef {
+  id: string;
+  name: string;
+  fields: RuleField[];
+  /**
+   * Whether `id`/`createdAt`/`updatedAt` are addressable on this collection
+   * (views only when the query selects them). Absent means true.
+   */
+  implicitFields?: boolean;
 }
